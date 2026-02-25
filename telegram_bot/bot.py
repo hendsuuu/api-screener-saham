@@ -223,7 +223,7 @@ class TelegramBotHandler:
 • Pre-screen ~342 saham IDX setiap scan
 • Analisis teknikal 5m: RSI, MACD, BB, VWAP, ADX, SuperTrend
 • Notifikasi otomatis setiap <b>15 menit</b> saat bursa buka
-• Jam bursa: Sesi 1 (09:00–11:30) | Sesi 2 (13:30–15:00) WIB
+• Jam bursa: Sesi 1 (09:00–11:30) | Sesi 2 (13:30–16:00) WIB
 
 Ketik /help untuk daftar lengkap perintah.
 Ketik /scan untuk mulai scan sekarang!
@@ -703,8 +703,31 @@ Ketik /scan untuk mulai scan sekarang!
                 parse_mode=ParseMode.HTML
             )
 
+    async def start_async(self):
+        """
+        Jalankan bot polling di atas event loop yang sudah berjalan.
+        Cocok dipakai bersama FastAPI/uvicorn.
+        """
+        app = self.build_app()
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Bot polling dimulai (async mode).")
+
+    async def stop_async(self):
+        """Hentikan bot polling dengan bersih."""
+        if self.app is None:
+            return
+        try:
+            await self.app.updater.stop()
+            await self.app.stop()
+            await self.app.shutdown()
+            logger.info("Bot polling dihentikan.")
+        except Exception as e:
+            logger.warning(f"Error saat stop bot: {e}")
+
     def run_polling(self):
-        """Jalankan bot dalam mode polling (untuk development)."""
+        """Jalankan bot dalam mode standalone polling (tanpa API server)."""
         app = self.build_app()
         logger.info("Bot berjalan dalam mode polling...")
         app.run_polling(drop_pending_updates=True)

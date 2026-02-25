@@ -279,9 +279,9 @@ class StockDataFetcher:
     def is_market_open(self) -> bool:
         """
         Cek apakah pasar BEI sedang buka.
-        Jam bursa: Senin-Jumat 09:00-15:00 WIB
+        Jam bursa: Senin-Jumat 09:00-16:00 WIB
         Sesi 1: 09:00-11:30
-        Sesi 2: 13:30-15:00
+        Sesi 2: 13:30-16:00
         Pre-opening: 08:45-09:00
         """
         import pytz
@@ -298,8 +298,8 @@ class StockDataFetcher:
 
         # Sesi 1: 09:00 - 11:30
         sesi1 = 9.0 <= time_decimal <= 11.5
-        # Sesi 2: 13:30 - 15:00
-        sesi2 = 13.5 <= time_decimal <= 15.0
+        # Sesi 2: 13:30 - 16:00
+        sesi2 = 13.5 <= time_decimal <= 16.0
 
         return sesi1 or sesi2
 

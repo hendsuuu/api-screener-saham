@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Config warning: {e}")
 
     # Test koneksi Telegram
-    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN != "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ":
+    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN != os.getenv("TELEGRAM_BOT_TOKEN"):
         connected = await notifier.test_connection()
         if connected:
             logger.info("✅ Telegram bot terhubung")
@@ -79,6 +79,22 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("✅ Scheduler dimulai")
 
+    # Mulai Telegram bot handler (polling)
+    if settings.TELEGRAM_BOT_TOKEN:
+        bot_handler = TelegramBotHandler(
+            token=settings.TELEGRAM_BOT_TOKEN,
+            chat_ids=settings.TELEGRAM_CHAT_IDS,
+            scanner=scanner,
+        )
+        try:
+            await bot_handler.start_async()
+            logger.info("✅ Telegram bot handler dimulai")
+        except Exception as e:
+            logger.warning(f"⚠️ Telegram bot handler gagal dimulai: {e}")
+            bot_handler = None
+    else:
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN tidak diset, bot handler dilewati")
+
     logger.info(
         f"✅ API berjalan di http://{settings.API_HOST}:{settings.API_PORT}")
     logger.info("=== SIAP MELAYANI PERMINTAAN ===")
@@ -87,6 +103,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("=== SAHAM SCALPER API SHUTTING DOWN ===")
+    if bot_handler:
+        await bot_handler.stop_async()
     if scheduler:
         scheduler.stop()
     logger.info("Shutdown selesai")

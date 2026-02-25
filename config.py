@@ -11,7 +11,7 @@ load_dotenv()
 
 class Settings:
     # ─── Telegram ─────────────────────────────
-    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_IDS: List[str] = [
         cid.strip()
         for cid in os.getenv("TELEGRAM_CHAT_IDS", "").split(",")

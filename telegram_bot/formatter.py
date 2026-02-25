@@ -3,6 +3,7 @@ Telegram Message Formatter - Format notifikasi sinyal scalping
 Menggunakan HTML formatting untuk Telegram
 """
 
+import html
 from screener.signal_generator import ScalpSignal
 from datetime import datetime
 from typing import List, Dict
@@ -289,7 +290,7 @@ Contoh: /signal BBCA</i>
 
 📅 Jam Bursa BEI:
 • Sesi 1 : 09:00 - 11:30 WIB
-• Sesi 2 : 13:30 - 15:00 WIB
+• Sesi 2 : 13:30 - 16:00 WIB
 • Hari   : Senin - Jumat
 
 ⏳ Screener akan aktif otomatis saat pasar buka.
@@ -307,11 +308,11 @@ Contoh: /signal BBCA</i>
             return f"Rp {int(p):,}".replace(",", ".")
 
         ticker = info.get("ticker", "?")
-        company = info.get("company_name", ticker)[:25]
+        company = html.escape(info.get("company_name", ticker)[:25])
         price = info.get("last_price", 0.0)
         chg = info.get("change_pct", 0.0)
         trend = info.get("trend", "UNKNOWN")
-        td = info.get("trend_detail", "-")
+        td = html.escape(info.get("trend_detail", "-"))
         e9 = info.get("ema9", 0.0)
         e20 = info.get("ema20", 0.0)
         e50 = info.get("ema50", 0.0)
@@ -320,18 +321,18 @@ Contoh: /signal BBCA</i>
         sup2 = info.get("support2", 0.0)
         res2 = info.get("resistance2", 0.0)
         rsi = info.get("rsi", 50.0)
-        rsi_z = info.get("rsi_zone", "-")
-        macd_s = info.get("macd_signal", "-")
-        bb_p = info.get("bb_position", "-")
+        rsi_z = html.escape(info.get("rsi_zone", "-"))
+        macd_s = html.escape(info.get("macd_signal", "-"))
+        bb_p = html.escape(info.get("bb_position", "-"))
         vol_r = info.get("volume_ratio", 1.0)
         adx = info.get("adx", 0.0)
         atr_pct = info.get("atr_pct", 0.0)
-        potential = info.get("potential", "NETRAL")
-        pot_detail = info.get("potential_detail", [])
-        risk = info.get("risk", "SEDANG")
-        risk_detail = info.get("risk_detail", [])
+        potential = html.escape(info.get("potential", "NETRAL"))
+        pot_detail = [html.escape(str(x)) for x in info.get("potential_detail", [])]
+        risk = html.escape(info.get("risk", "SEDANG"))
+        risk_detail = [html.escape(str(x)) for x in info.get("risk_detail", [])]
         conf = info.get("confidence", 0)
-        conf_r = info.get("confidence_reasons", [])
+        conf_r = [html.escape(str(x)) for x in info.get("confidence_reasons", [])]
         cross_up = info.get("ema_cross_up", False)
         cross_dn = info.get("ema_cross_down", False)
         mcross_up = info.get("macd_cross_up", False)
@@ -348,7 +349,7 @@ Contoh: /signal BBCA</i>
             "BEARISH":       "📉 BEARISH",
             "DOWNTREND_WEAK": "↘️ DOWNTREND LEMAH",
             "SIDEWAYS":      "↔️ SIDEWAYS",
-        }.get(trend, f"❓ {trend}")
+        }.get(trend, f"❓ {html.escape(trend)}")
 
         chg_icon = "🔺" if chg >= 0 else "🔻"
         macd_icon = "🟢" if macd_s == "BULLISH" else "🔴"
@@ -450,7 +451,7 @@ Contoh: /signal BBCA</i>
             )
         else:
             msg += (
-                f"\nℹ️ Tidak ada sinyal aktif saat ini (confidence < threshold)\n"
+                f"\nℹ️ Tidak ada sinyal aktif saat ini (confidence rendah / belum memenuhi threshold)\n"
             )
 
         msg += (
@@ -460,7 +461,7 @@ Contoh: /signal BBCA</i>
         )
 
         return msg.strip()
-
+ 
     @staticmethod
     def format_help() -> str:
         """Pesan bantuan command bot."""
