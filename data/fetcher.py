@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta
 import time
 
+from data.store import get_store
+
 logger = logging.getLogger(__name__)
 
 # Senyapkan log 'Failed to get ticker' bawaan yfinance
@@ -32,6 +34,11 @@ class StockDataFetcher:
         self.session_cache: Dict[str, pd.DataFrame] = {}
         self.cache_time: Dict[str, datetime] = {}
         self.cache_duration = 60  # detik
+        # Persistent OHLCV store (Parquet per-ticker)
+        try:
+            self.store = get_store()
+        except Exception:
+            self.store = None
 
     def _is_cache_valid(self, ticker: str) -> bool:
         if ticker not in self.cache_time:
@@ -93,6 +100,14 @@ class StockDataFetcher:
                 # Simpan ke cache
                 self.session_cache[cache_key] = df
                 self.cache_time[cache_key] = datetime.now()
+
+                # Simpan ke persistent store (non-blocking — jika error diabaikan)
+                if self.store is not None:
+                    try:
+                        self.store.upsert(ticker, interval, df)
+                    except Exception as _se:
+                        logger.debug(f"Store upsert skip [{ticker}]: {_se}")
+
                 return df
 
             except Exception as e:
@@ -132,7 +147,17 @@ class StockDataFetcher:
                     return None
 
                 df = df.dropna(subset=["Open", "High", "Low", "Close"])
-                return df if not df.empty else None
+                if df.empty:
+                    return None
+
+                # Simpan ke persistent store
+                if self.store is not None and interval in ("1d", "1wk"):
+                    try:
+                        self.store.upsert(ticker, "1d", df)
+                    except Exception as _se:
+                        logger.debug(f"Store upsert (daily) skip [{ticker}]: {_se}")
+
+                return df
 
             except Exception as e:
                 last_error = e

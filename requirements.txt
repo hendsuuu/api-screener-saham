@@ -31,8 +31,7 @@ httpx==0.28.1
 
 # ─── Data & Analysis ────────────────────────────
 scipy==1.14.1
-ta==0.11.0          # Technical Analysis library (opsional, backup)
-
+ta==0.11.0          # Technical Analysis library (opsional, backup)pyarrow>=14.0.0     # Engine Parquet untuk persistent OHLCV store
 # ─── Logging & Monitoring ───────────────────────
 loguru==0.7.3
 

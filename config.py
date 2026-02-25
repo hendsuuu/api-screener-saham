@@ -62,6 +62,21 @@ class Settings:
     # ─── Workers ──────────────────────────────
     MAX_SCAN_WORKERS: int = int(os.getenv("MAX_SCAN_WORKERS", "8"))
 
+    # ─── Data Store ───────────────────────────
+    # Direktori penyimpanan file Parquet historis OHLCV
+    DATA_STORE_PATH: str = os.getenv("DATA_STORE_PATH", "data/store")
+    # Berapa hari data yang disimpan (prune otomatis via manage.py)
+    DATA_STORE_MAX_DAYS: int = int(os.getenv("DATA_STORE_MAX_DAYS", "365"))
+
+    # ─── Admin Bot ────────────────────────────
+    # Chat ID pribadi yang boleh mengirim perintah admin ke bot
+    # Isi di .env: ADMIN_CHAT_IDS=123456789,987654321
+    ADMIN_CHAT_IDS: List[int] = [
+        int(x.strip())
+        for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
+        if x.strip().lstrip("-").isdigit()
+    ]
+
     def build_screener_criteria(self):
         """Buat ScreenerCriteria dari nilai config saat ini."""
         from data.dynamic_screener import ScreenerCriteria

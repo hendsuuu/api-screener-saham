@@ -5,6 +5,8 @@ Menggunakan python-telegram-bot v20+
 
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import List, Optional, Union
 
 from telegram import Bot, Update
@@ -15,6 +17,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
+from config import settings
 from screener.signal_generator import ScalpSignal
 from screener.scanner import StockScanner
 from data.fetcher import StockDataFetcher
@@ -22,6 +25,26 @@ from data.stock_list import get_yahoo_symbol, IDX_UNIVERSE
 from telegram_bot.formatter import TelegramFormatter
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ADMIN AUTH
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_admin(user_id: int) -> bool:
+    """Cek apakah user_id ada di ADMIN_CHAT_IDS."""
+    return user_id in settings.ADMIN_CHAT_IDS
+
+
+async def _require_admin(update: Update) -> bool:
+    """Kirim pesan 403 jika bukan admin, kembalikan False."""
+    if not _is_admin(update.effective_user.id):
+        await update.message.reply_text(
+            "⛔ Perintah ini hanya untuk admin bot.",
+            parse_mode=ParseMode.HTML,
+        )
+        return False
+    return True
 
 
 class TelegramNotifier:
@@ -167,6 +190,8 @@ class TelegramBotHandler:
         self.app.add_handler(CommandHandler("waspada", self.cmd_waspada))
         self.app.add_handler(CommandHandler("sell", self.cmd_waspada))  # alias lama
         self.app.add_handler(CommandHandler("market", self.cmd_market))
+        # Admin commands (hanya ADMIN_CHAT_IDS)
+        self.app.add_handler(CommandHandler("admin", self.cmd_admin))
 
         # Handler pesan tidak dikenal
         self.app.add_handler(
@@ -247,7 +272,9 @@ Ketik /scan untuk mulai scan sekarang!
         )
 
         try:
-            signals = await self.scanner.scan_all_async(min_score=50)
+            signals = await self.scanner.scan_all_async(
+                min_score=settings.MIN_SIGNAL_SCORE
+            )
             market = self.fetcher.get_market_status()
 
             if not signals:
@@ -262,12 +289,24 @@ Ketik /scan untuk mulai scan sekarang!
             summary_text = self.formatter.format_summary(signals, market)
             await update.message.reply_text(summary_text, parse_mode=ParseMode.HTML)
 
-            # Kirim top 3 sinyal terbaik
+            # Kirim top 3 sinyal BUY detail (auto-sorted by score)
+            buy_signals = [s for s in signals if s.signal_type == "BUY"][:3]
+            warn_signals = [s for s in signals if s.signal_type == "WASPADA"][:2]
+
             await asyncio.sleep(1)
-            for signal in signals[:3]:
+            for signal in buy_signals:
                 detail = self.formatter.format_signal(signal)
                 await update.message.reply_text(detail, parse_mode=ParseMode.HTML)
                 await asyncio.sleep(0.8)
+
+            # Kirim max 2 sinyal WASPADA sebagai ringkasan satu pesan
+            if warn_signals:
+                await asyncio.sleep(0.5)
+                warn_msg = "🔴 <b>SAHAM WASPADA SCAN INI:</b>\n"
+                for s in warn_signals:
+                    warn_msg += f"  • <b>{s.ticker_clean}</b> Rp {int(s.current_price):,} | RSI {s.rsi:.0f} | Skor {s.signal_score}\n"
+                warn_msg += "\nGunakan /waspada untuk daftar lengkap"
+                await update.message.reply_text(warn_msg, parse_mode=ParseMode.HTML)
 
         except Exception as e:
             logger.error(f"Error cmd_scan: {e}")
@@ -277,16 +316,21 @@ Ketik /scan untuk mulai scan sekarang!
             )
 
     async def cmd_top(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Tampilkan top sinyal dari scan terakhir."""
+        """Tampilkan top sinyal dari scan terakhir (termasuk dari cache disk)."""
         top = self.scanner.get_top_signals(5)
 
         if not top:
             await update.message.reply_text(
-                "ℹ️ Belum ada data scan. Gunakan /scan terlebih dahulu.",
+                "ℹ️ Belum ada data scan hari ini.\n"
+                "Gunakan /scan untuk mulai screening.",
                 parse_mode=ParseMode.HTML
             )
             return
 
+        await update.message.reply_text(
+            f"📊 <b>TOP {len(top)} SINYAL HARI INI</b>",
+            parse_mode=ParseMode.HTML
+        )
         for signal in top:
             detail = self.formatter.format_signal(signal)
             await update.message.reply_text(detail, parse_mode=ParseMode.HTML)
@@ -328,55 +372,278 @@ Ketik /scan untuk mulai scan sekarang!
             )
 
     async def cmd_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Tampilkan sinyal BUY saja."""
-        buy_signals = [
-            s for s in self.scanner.last_scan_results if s.signal_type == "BUY"]
+        """Tampilkan sinyal BUY saja (dari memory atau cache disk hari ini)."""
+        buy_signals = self.scanner._get_results_with_cache(signal_type="BUY")
 
         if not buy_signals:
             await update.message.reply_text(
-                "ℹ️ Tidak ada sinyal BUY. Gunakan /scan untuk memperbarui.",
+                "ℹ️ Tidak ada sinyal BUY hari ini.\n"
+                "Gunakan /scan untuk memperbarui atau tunggu scan otomatis.",
                 parse_mode=ParseMode.HTML
             )
             return
 
-        msg = "🟢 <b>SINYAL BUY AKTIF:</b>\n\n"
+        scan_time = self.scanner.last_scan_time
+        time_str = ""
+        if scan_time:
+            try:
+                import pytz
+                from datetime import datetime as _dt
+                wib = pytz.timezone("Asia/Jakarta")
+                ts = _dt.fromisoformat(scan_time).astimezone(wib)
+                time_str = f"\n⏰ <i>Data scan: {ts.strftime('%H:%M WIB')}</i>"
+            except Exception:
+                pass
+
+        msg = f"🟢 <b>SINYAL BUY AKTIF ({len(buy_signals)} saham):</b>{time_str}\n\n"
         for s in buy_signals[:5]:
-            def fmt(p):
-                return f"Rp {int(p):,}".replace(",", ".")
+            def fmt(p): return f"Rp {int(p):,}".replace(",", ".")
+            strength_icon = "💪" if s.strength == "STRONG" else "👍" if s.strength == "MODERATE" else "⚠️"
             msg += (
-                f"• <b>{s.ticker_clean}</b> | "
-                f"Entry: {fmt(s.entry_price)} | TP2: {fmt(s.tp2)} | SL: {fmt(s.sl)} | "
-                f"Skor: {s.signal_score}/100\n"
+                f"{strength_icon} <b>{s.ticker_clean}</b> ({s.company_name[:20]}) | Skor: {s.signal_score}/100\n"
+                f"   Entry: {fmt(s.entry_price)} | TP2: {fmt(s.tp2)} | SL: {fmt(s.sl)}\n\n"
             )
 
-        msg += "\n💡 Gunakan /signal [KODE] untuk detail lengkap"
+        msg += "💡 Gunakan /signal [KODE] untuk detail lengkap"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     async def cmd_waspada(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Tampilkan sinyal WASPADA (kondisi bearish)."""
-        warn_signals = [
-            s for s in self.scanner.last_scan_results if s.signal_type == "WASPADA"]
+        """Tampilkan sinyal WASPADA (kondisi bearish, dari memory atau cache disk)."""
+        warn_signals = self.scanner._get_results_with_cache(signal_type="WASPADA")
 
         if not warn_signals:
             await update.message.reply_text(
-                "ℹ️ Tidak ada sinyal WASPADA saat ini. Gunakan /scan untuk memperbarui.",
+                "ℹ️ Tidak ada sinyal WASPADA hari ini.\n"
+                "Gunakan /scan untuk memperbarui atau tunggu scan otomatis.",
                 parse_mode=ParseMode.HTML
             )
             return
 
-        msg = "🔴 <b>SAHAM KONDISI WASPADA:</b>\n"
+        scan_time = self.scanner.last_scan_time
+        time_str = ""
+        if scan_time:
+            try:
+                import pytz
+                from datetime import datetime as _dt
+                wib = pytz.timezone("Asia/Jakarta")
+                ts = _dt.fromisoformat(scan_time).astimezone(wib)
+                time_str = f" (scan {ts.strftime('%H:%M WIB')})"
+            except Exception:
+                pass
+
+        msg = f"🔴 <b>SAHAM WASPADA ({len(warn_signals)} saham){time_str}:</b>\n"
         msg += "⚠️ <i>Di BEI tidak ada short-selling. Hindari posisi baru pada saham berikut:</i>\n\n"
         for s in warn_signals[:8]:
-            alasan = s.reasons[1][:60] if len(s.reasons) > 1 else "kondisi teknikal memburuk"
+            # reasons[1] adalah alasan pertama setelah pesan peringatan header
+            alasan_idx = 1 if len(s.reasons) > 1 else 0
+            alasan = s.reasons[alasan_idx][:70] if s.reasons else "kondisi teknikal memburuk"
+            change_icon = "🔻" if s.change_pct < 0 else "🔺"
             msg += (
-                f"• <b>{s.ticker_clean}</b> ({s.company_name}) | "
-                f"Harga: Rp {int(s.current_price):,} | "
-                f"Skor: {s.signal_score}/100\n"
+                f"• <b>{s.ticker_clean}</b> ({s.company_name[:18]}) "
+                f"{change_icon} {s.change_pct:+.1f}% | RSI {s.rsi:.0f} | Skor {s.signal_score}\n"
                 f"  ↳ {alasan}\n"
             )
 
         msg += "\n💡 Gunakan /signal [KODE] untuk analisis lengkap"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    # ── ADMIN COMMANDS ────────────────────────────────────────────────────────
+
+    async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Perintah admin pribadi.
+
+        Penggunaan (chat pribadi dengan bot):
+            /admin              → tampilkan menu admin
+            /admin status       → status server + store stats + pasar
+            /admin scan         → paksa scan + kirim hasil ke sini
+            /admin store        → statistik data store
+            /admin logs [N]     → N baris terakhir log (default 30)
+            /admin prescreen    → jalankan pre-screener dan tampilkan info
+
+        Hanya user yang ID-nya ada di ADMIN_CHAT_IDS (.env) yang bisa menggunakan.
+        """
+        if not await _require_admin(update):
+            return
+
+        subcmd = (context.args[0].lower() if context.args else "menu")
+
+        # ── /admin (menu) ────────────────────────────────────────────────────
+        if subcmd == "menu" or subcmd == "help":
+            await update.message.reply_text(
+                "🔧 <b>ADMIN MENU</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "/admin status       — Status server & store\n"
+                "/admin scan         — Paksa scan sekarang\n"
+                "/admin store        — Statistik data store\n"
+                "/admin logs [N]     — Log terakhir (def 30 baris)\n"
+                "/admin prescreen    — Jalankan pre-screener\n",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        # ── /admin status ────────────────────────────────────────────────────
+        if subcmd == "status":
+            market = self.fetcher.get_market_status()
+            summary = self.scanner.get_market_summary()
+
+            # Store stats
+            try:
+                from data.store import get_store
+                st = get_store().stats()
+                store_txt = (
+                    f"📦 <b>Data Store</b>\n"
+                    f"  Tickers : {st['total_tickers']}\n"
+                    f"  Baris   : {st['total_rows']:,}\n"
+                    f"  Disk    : {st['disk_mb']:.1f} MB\n"
+                    f"  Terbaru : {st.get('newest','N/A')}\n"
+                )
+            except Exception as e:
+                store_txt = f"📦 Store: Error ({e})\n"
+
+            # Scan summary
+            scan_txt = (
+                f"📊 <b>Scan Terakhir</b>\n"
+                f"  Total  : {summary.get('total_signals', 0)}\n"
+                f"  BUY    : {summary.get('buy_signals', 0)}\n"
+                f"  WASPADA: {summary.get('sell_signals', 0)}\n"
+                f"  Waktu  : {summary.get('scan_time', 'N/A')}\n"
+            )
+
+            market_emoji = "🟢" if market.get("is_open") else "🔴"
+            market_txt = (
+                f"{market_emoji} <b>Pasar</b>: {market.get('status')}\n"
+                f"  Waktu  : {market.get('time_wib','N/A')} WIB\n"
+            )
+
+            await update.message.reply_text(
+                "🔧 <b>ADMIN STATUS</b>\n━━━━━━━━━━━━━━━━━\n"
+                + market_txt + "\n"
+                + scan_txt + "\n"
+                + store_txt,
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        # ── /admin scan ──────────────────────────────────────────────────────
+        if subcmd == "scan":
+            await update.message.reply_text(
+                "⏳ <b>Memulai scan paksa...</b>", parse_mode=ParseMode.HTML
+            )
+            try:
+                signals = await self.scanner.scan_all_async(min_score=50)
+                market = self.fetcher.get_market_status()
+                if not signals:
+                    await update.message.reply_text(
+                        "ℹ️ Tidak ada sinyal saat ini.", parse_mode=ParseMode.HTML
+                    )
+                    return
+                summary_text = self.formatter.format_summary(signals, market)
+                await update.message.reply_text(summary_text, parse_mode=ParseMode.HTML)
+                for signal in signals[:3]:
+                    await asyncio.sleep(0.5)
+                    await update.message.reply_text(
+                        self.formatter.format_signal(signal),
+                        parse_mode=ParseMode.HTML,
+                    )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Error scan: {str(e)[:300]}", parse_mode=ParseMode.HTML
+                )
+            return
+
+        # ── /admin store ─────────────────────────────────────────────────────
+        if subcmd == "store":
+            try:
+                from data.store import get_store
+                st = get_store().stats()
+                lines = ["📦 <b>DATA STORE</b>\n━━━━━━━━━━━━━━━"]
+                lines.append(f"Path    : <code>{st['store_path']}</code>")
+                lines.append(f"Tickers : {st['total_tickers']}")
+                lines.append(f"Baris   : {st['total_rows']:,}")
+                lines.append(f"Disk    : {st['disk_mb']:.1f} MB")
+                lines.append(f"Oldest  : {st.get('oldest','N/A')}")
+                lines.append(f"Newest  : {st.get('newest','N/A')}")
+                if st.get("intervals"):
+                    lines.append("\n<b>Per Interval:</b>")
+                    for iv, info in st["intervals"].items():
+                        lines.append(
+                            f"  [{iv}]  {info['tickers']} tickers  "
+                            f"{info['rows']:,} rows  {info['mb']:.1f} MB"
+                        )
+                await update.message.reply_text(
+                    "\n".join(lines), parse_mode=ParseMode.HTML
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Error baca store: {e}", parse_mode=ParseMode.HTML
+                )
+            return
+
+        # ── /admin logs [N] ──────────────────────────────────────────────────
+        if subcmd == "logs":
+            n = 30
+            if len(context.args) >= 2:
+                try:
+                    n = int(context.args[1])
+                except ValueError:
+                    pass
+            log_path = Path("logs/app.log")
+            if not log_path.exists():
+                await update.message.reply_text(
+                    "❌ File log tidak ditemukan.", parse_mode=ParseMode.HTML
+                )
+                return
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                tail = "".join(lines[-n:])
+                if len(tail) > 3800:
+                    tail = "...\n" + tail[-3800:]
+                await update.message.reply_text(
+                    f"📋 <b>Log terakhir ({n} baris):</b>\n<pre>{tail}</pre>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Error baca log: {e}", parse_mode=ParseMode.HTML
+                )
+            return
+
+        # ── /admin prescreen ─────────────────────────────────────────────────
+        if subcmd == "prescreen":
+            await update.message.reply_text(
+                "⏳ Menjalankan pre-screener...", parse_mode=ParseMode.HTML
+            )
+            try:
+                from data.dynamic_screener import DynamicPreScreener
+                screener = DynamicPreScreener()
+                candidates = await asyncio.get_event_loop().run_in_executor(
+                    None, screener.run
+                )
+                total = len(candidates) if candidates else 0
+                msg = (
+                    f"✅ <b>Pre-screener selesai</b>\n"
+                    f"Kandidat ditemukan: <b>{total}</b> saham\n"
+                )
+                if candidates:
+                    preview = ", ".join(
+                        c.replace(".JK", "") for c in (candidates[:15] if isinstance(candidates[0], str) else [c.get("ticker","") for c in candidates[:15]])
+                    )
+                    msg += f"Contoh: {preview}{'...' if total > 15 else ''}"
+                await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Error prescreen: {str(e)[:300]}", parse_mode=ParseMode.HTML
+                )
+            return
+
+        # ── Unknown subcmd ───────────────────────────────────────────────────
+        await update.message.reply_text(
+            f"❓ Sub-perintah tidak dikenal: <code>{subcmd}</code>\n"
+            "Ketik /admin untuk daftar perintah.",
+            parse_mode=ParseMode.HTML,
+        )
 
     async def handle_unknown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle pesan yang bukan command."""

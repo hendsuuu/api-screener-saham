@@ -1,248 +1,253 @@
-# 📈 Saham Scalper Bot - IDX Screener + Telegram Notifier
+﻿#  IDX Scalper Bot  Screener + Telegram Notifier
 
-Sistem screener saham Indonesia (IDX/BEI) berbasis FastAPI dengan strategi **scalping intraday** yang mengirim notifikasi sinyal ke bot Telegram.
-
----
-
-## ✨ Fitur Utama
-
-| Fitur            | Detail                                                             |
-| ---------------- | ------------------------------------------------------------------ |
-| 📊 Data Source   | Yahoo Finance (`yfinance`) — real-time intraday 5 menit            |
-| 🎯 Strategi      | Scalping intraday target profit **2–3%**                           |
-| 📐 Signal Detail | Entry Zone, TP1/TP2/TP3, Stop Loss, Risk:Reward                    |
-| 🤖 Telegram Bot  | Notif otomatis ke grup/pribadi                                     |
-| ⏱ Scheduler      | Auto-scan setiap 15 menit saat jam bursa                           |
-| 🔬 Indikator     | RSI, MACD, Bollinger Bands, VWAP, ADX, ATR, Stochastic, SuperTrend |
-| 🏭 Watchlist     | 35+ saham LQ45/IDX30 paling likuid                                 |
-| ⚡ Performance   | Scan paralel (ThreadPoolExecutor)                                  |
+Sistem screener saham Indonesia (IDX/BEI) berbasis **FastAPI** dengan strategi **scalping intraday** yang mengirim notifikasi sinyal ke Telegram. Didukung persistent OHLCV database dan CLI management tool untuk VPS.
 
 ---
 
-## 📐 Detail Sinyal Scalping
+##  Fitur Utama
 
-Setiap sinyal berisi informasi lengkap:
+| Fitur                  | Detail                                                               |
+|------------------------|----------------------------------------------------------------------|
+|  Data Source         | Yahoo Finance (`yfinance`)  real-time intraday 5 menit             |
+|  Strategi            | Scalping intraday target profit **23%**                            |
+|  Sinyal BUY          | Entry Zone, TP1/TP2/TP3, Stop Loss, Risk:Reward                     |
+|  Sinyal WASPADA      | Peringatan kondisi bearish (BEI tidak ada short-selling)            |
+|  Telegram Bot        | Notifikasi otomatis ke grup/channel + command interaktif            |
+|  Auto Scan            | Setiap 15 menit saat jam bursa BEI                                  |
+|  Indikator           | RSI, MACD, Bollinger Bands, VWAP, ADX, ATR, Stochastic, SuperTrend |
+|  Dynamic Pre-Screen  | Filter ~342 saham IDX berdasarkan volume & momentum                 |
+|  Persistent Store    | Data OHLCV tersimpan Parquet, tumbuh akumulatif tiap scan           |
+|  Signal Cache        | Sinyal tersimpan JSON per hari  /buy & /waspada tetap aktif setelah restart |
+|  CLI Management      | `manage.py` untuk kontrol VPS: start/stop/status/scan/store         |
+|  Admin Commands      | Command pribadi via Telegram untuk pemilik bot                      |
+
+---
+
+##  Contoh Sinyal BUY
 
 ```
-🟢 SINYAL SCALP BUY
-━━━━━━━━━━━━━━━━━━━━
-🏷 BBCA | Bank Central Asia
+ SINYAL SCALP BUY
 
-📊 SKOR SINYAL: 78/100
-💪 Kekuatan: STRONG
+ BBCA | Bank Central Asia
 
-💰 HARGA ENTRY
-🎯 Entry Point  : Rp 9.500
-📍 Zone Entry   : Rp 9.481 - Rp 9.529
+ SKOR SINYAL: 78/100 |  STRONG
 
-▲ TAKE PROFIT
-✅ TP1 (+1.5%) : Rp 9.643
-✅ TP2 (+2.5%) : Rp 9.738  ⭐ Target Utama
-✅ TP3 (+3.5%) : Rp 9.833  🚀 Target Maksimal
+ HARGA ENTRY
+ Entry Point  : Rp 9.500
+ Zone Entry   : Rp 9.481 - Rp 9.529
 
-🛑 STOP LOSS
-❌ SL (-1.0%)  : Rp 9.405
+ TAKE PROFIT
+ TP1 (+1.5%) : Rp 9.643
+ TP2 (+2.5%) : Rp 9.738   Target Utama
+ TP3 (+3.5%) : Rp 9.833   Target Maksimal
 
-⚖️ RISK : REWARD = 1 : 2.5
+ STOP LOSS  : Rp 9.405 (-1.0%)
+ RISK : REWARD = 1 : 2.5
 ```
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
-### 1. Clone & Install
+### 1. Install
 
 ```bash
-# Clone atau buat project
 cd d:\api_saham
-
-# Buat virtual environment
-python -m venv venv
-venv\Scripts\activate   # Windows
-# source venv/bin/activate  # Linux/Mac
-
-# Install dependencies
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # Linux/Mac
 pip install -r requirements.txt
 ```
 
-### 2. Konfigurasi .env
-
-```bash
-# Copy file contoh
-copy .env.example .env
-```
-
-Edit `.env`:
+### 2. Konfigurasi `.env`
 
 ```env
-TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHI...  # Dari @BotFather
-TELEGRAM_CHAT_IDS=-100123456789,987654321    # ID grup/user
+TELEGRAM_BOT_TOKEN=1234567890:ABCdef...
+TELEGRAM_CHAT_IDS=-100123456789
+
+# Admin bot (untuk perintah /admin)
+ADMIN_CHAT_IDS=123456789         # Cari ID Anda di @userinfobot
+
+API_SECRET_KEY=ganti-dengan-key-anda
+MIN_SIGNAL_SCORE=60
+DATA_STORE_PATH=data/store
 ```
 
-#### Cara Mendapatkan Chat ID:
-
-1. Tambahkan `@userinfobot` ke Telegram
-2. Untuk grup: Tambahkan bot ke grup, lalu kirim pesan, cek dengan `https://api.telegram.org/bot<TOKEN>/getUpdates`
-3. Chat ID grup biasanya negatif: `-100xxxxxxxxxx`
-
-### 3. Setup Telegram Bot
-
-1. Buka Telegram, cari `@BotFather`
-2. Kirim `/newbot`
-3. Ikuti instruksi, copy TOKEN
-4. Tambahkan bot ke grup Anda
-5. Berikan izin **Send Messages** ke bot
-
-### 4. Test
+### 3. Jalankan
 
 ```bash
-# Test komponen tanpa Telegram
-python test_screener.py
-```
-
-### 5. Jalankan
-
-```bash
-# Mode API Server (dengan scheduler otomatis)
+# API Server + Scheduler + Auto Notif
 python main.py
 
-# Mode Bot Polling (untuk development)
-python main.py bot
+# Atau via CLI (direkomendasikan untuk VPS):
+python manage.py start
 ```
 
 ---
 
-## 📡 API Endpoints
-
-Setelah server berjalan, buka: `http://localhost:8000/docs`
-
-| Endpoint                         | Method | Deskripsi                |
-| -------------------------------- | ------ | ------------------------ |
-| `/`                              | GET    | Info API & status pasar  |
-| `/market`                        | GET    | Status pasar BEI         |
-| `/watchlist`                     | GET    | Daftar saham watchlist   |
-| `/scan`                          | POST   | Jalankan scan screener   |
-| `/signal/{ticker}`               | GET    | Sinyal untuk 1 saham     |
-| `/signals/top`                   | GET    | Top N sinyal terakhir    |
-| `/signals/summary`               | GET    | Ringkasan market         |
-| `/telegram/test`                 | POST   | Test koneksi Telegram    |
-| `/telegram/send-signal/{ticker}` | POST   | Kirim sinyal ke Telegram |
-| `/scheduler/jobs`                | GET    | Info jadwal scan         |
-| `/scheduler/trigger`             | POST   | Trigger scan manual      |
-
-### Contoh Request
+##  CLI (`manage.py`)
 
 ```bash
-# Scan saham tertentu
-curl http://localhost:8000/signal/BBCA
+# Server
+python manage.py start [--port 8000]
+python manage.py stop
+python manage.py restart
+python manage.py status          # Status + store stats
+python manage.py logs [-n 50]    # Log terakhir
 
-# Scan semua dengan filter BUY
-curl -X POST http://localhost:8000/scan \
-  -H "Content-Type: application/json" \
-  -d '{"min_score": 60, "signal_filter": "BUY", "send_telegram": true}'
+# Scan
+python manage.py scan            # Paksa scan via API
+python manage.py prescreen       # Jalankan pre-screener
+
+# Data Store
+python manage.py store stats
+python manage.py store list [--interval 5m]
+python manage.py store trim [--days 365]
+python manage.py store delete BBCA [--interval 5m]
+
+# Bot saja (tanpa API server)
+python manage.py bot
 ```
 
 ---
 
-## 🤖 Telegram Bot Commands
+##  API Endpoints
 
-| Command        | Fungsi                       |
-| -------------- | ---------------------------- |
-| `/start`       | Selamat datang               |
-| `/scan`        | Scan semua saham (1-2 menit) |
-| `/top`         | Top 5 sinyal terakhir        |
-| `/signal BBCA` | Sinyal detail satu saham     |
-| `/buy`         | Daftar sinyal BUY            |
-| `/sell`        | Daftar sinyal SELL           |
-| `/market`      | Status pasar + ringkasan     |
-| `/help`        | Panduan lengkap              |
+Buka `http://localhost:8000/docs` setelah server berjalan.
 
----
-
-## ⏱ Jadwal Scan Otomatis
-
-| Waktu WIB              | Aksi                 |
-| ---------------------- | -------------------- |
-| 09:00                  | Notif pasar BUKA     |
-| 09:05                  | Scan pertama         |
-| 09:20, 09:35, 09:50... | Scan setiap 15 menit |
-| 11:20                  | Scan terakhir sesi 1 |
-| 13:35, 13:50           | Scan sesi 2          |
-| 14:45                  | Notif pre-close      |
-| 15:05                  | Notif pasar TUTUP    |
+| Endpoint               | Method | Deskripsi                  |
+|------------------------|--------|----------------------------|
+| `/`                    | GET    | Info + status pasar        |
+| `/market`              | GET    | Status bursa BEI           |
+| `/scan`                | POST   | Jalankan scan              |
+| `/signal/{ticker}`     | GET    | Sinyal 1 saham             |
+| `/signals/top`         | GET    | Top N sinyal               |
+| `/signals/summary`     | GET    | Ringkasan market           |
+| `/scheduler/trigger`   | POST   | Trigger scan manual        |
+| `/prescreen/run`       | POST   | Jalankan pre-screener      |
+| `/prescreen/criteria`  | PATCH  | Hot-reload kriteria filter |
 
 ---
 
-## 🔬 Strategi & Indikator
+##  Perintah Telegram
 
-### Signal Scoring (0-100 poin):
+### Publik
 
-| Kriteria                      | Bobot   |
-| ----------------------------- | ------- |
-| Trend Alignment (EMA 9/20/50) | 25 poin |
-| MACD Konfirmasi               | 20 poin |
-| RSI Kondisi                   | 20 poin |
-| Volume Ratio                  | 15 poin |
-| ADX Trend Strength            | 10 poin |
-| Candlestick Pattern           | 10 poin |
+| Command          | Fungsi                                                        |
+|------------------|---------------------------------------------------------------|
+| `/start`         | Sambutan                                                     |
+| `/scan`          | Scan ~342 saham IDX, kirim sinyal terbaik                    |
+| `/top`           | Top 5 sinyal (dari cache jika server baru restart)           |
+| `/signal BBCA`   | Analisis satu saham                                          |
+| `/buy`           | Daftar sinyal BUY hari ini                                   |
+| `/waspada`       | Daftar saham kondisi bearish hari ini                        |
+| `/market`        | Status pasar + ringkasan scan                                |
 
-### Kekuatan Sinyal:
+> Ketik kode saham langsung (contoh: `BBCA`)  bot langsung analisis!
 
-- **STRONG** (≥ 75): Sinyal sangat kuat
-- **MODERATE** (55-74): Sinyal cukup kuat
-- **WEAK** (45-54): Sinyal lemah, hati-hati
+### Admin (`ADMIN_CHAT_IDS`)
 
-### Manajemen Posisi yang Disarankan:
-
-1. **Entry** di zone entry yang ditentukan
-2. Saat **TP1 (+1.5%)** tercapai → cut sebagian (30%), geser SL ke breakeven
-3. Saat **TP2 (+2.5%)** tercapai → cut lagi (50%), biarkan sisanya
-4. **TP3 (+3.5%)** → full exit atau trailing stop
-5. **SL** adalah batas keras — DO NOT HOLD jika tertembus
+| Command             | Fungsi                                   |
+|---------------------|------------------------------------------|
+| `/admin status`     | Status server + store + scan terakhir    |
+| `/admin scan`       | Paksa scan, hasilnya dikirim ke Anda     |
+| `/admin store`      | Statistik data store                     |
+| `/admin logs [30]`  | N baris terakhir app.log                 |
+| `/admin prescreen`  | Jalankan pre-screener                    |
 
 ---
 
-## 📁 Struktur Project
+##  Data Architecture
+
+### OHLCV Store (Parquet)
+
+```
+data/store/
+ 5m/   BBCA.parquet  BBRI.parquet  ...     auto-append tiap scan
+ 1d/   BBCA.parquet  BBRI.parquet  ...     data harian
+ signals_2025-02-25.json    sinyal hari ini (expire esok)
+ signals_2025-02-24.json    riwayat 7 hari
+```
+
+**Logika akumulatif:**
+```
+Data lama : [1, 2, 3, 4, 5]
+Data baru  :       [3, 4, 5, 6, 7]
+Hasil disk : [1, 2, 3, 4, 5, 6, 7]    tidak ada yang dihapus
+```
+
+### Signal Cache (JSON)
+
+- Setiap scan menyimpan sinyal ke `signals_YYYY-MM-DD.json`
+- `/buy` dan `/waspada` tetap tampil meski server restart
+- Expire otomatis tengah malam WIB
+- Riwayat 7 hari terakhir disimpan
+
+---
+
+##  Jadwal Scan Otomatis
+
+| Waktu (WIB)  | Aksi                            |
+|--------------|---------------------------------|
+| 09:00        | Notif pasar BUKA                |
+| 09:0511:20  | Scan tiap 15 menit (Sesi 1)     |
+| 13:3514:50  | Scan tiap 15 menit (Sesi 2)     |
+| 14:45        | Notif pre-close                 |
+| 15:05        | Notif pasar TUTUP               |
+
+---
+
+##  Scoring Sinyal (0100 poin)
+
+| Kriteria                      | Bobot  |
+|-------------------------------|--------|
+| Trend Alignment (EMA 9/20/50) | 25 pts |
+| MACD Konfirmasi               | 20 pts |
+| RSI Kondisi                   | 20 pts |
+| Volume Ratio                  | 15 pts |
+| ADX Trend Strength            | 10 pts |
+| Candlestick Pattern           | 10 pts |
+
+**Kekuatan:** STRONG (75) | MODERATE (5574) | WEAK (4554)
+
+**Jenis sinyal:**
+-  **BUY**  kondisi bullish, dilengkapi Entry/TP/SL/RR
+-  **WASPADA**  kondisi bearish, **BUKAN short signal** (BEI larang short selling)
+
+---
+
+##  Struktur Project
 
 ```
 api_saham/
-├── main.py                     # FastAPI app + entry point
-├── config.py                   # Konfigurasi dari .env
-├── requirements.txt
-├── .env.example                # Template konfigurasi
-├── test_screener.py            # Script test
-│
-├── data/
-│   ├── fetcher.py              # Yahoo Finance data fetcher
-│   └── stock_list.py           # Daftar saham IDX (LQ45, IDX30)
-│
-├── screener/
-│   ├── indicators.py           # RSI, MACD, BB, ATR, VWAP, ADX, dll
-│   ├── signal_generator.py     # Kalkulasi Entry/TP/SL, scoring
-│   └── scanner.py              # Runner scan paralel
-│
-├── telegram_bot/
-│   ├── bot.py                  # Bot handler + notifier
-│   ├── formatter.py            # Format pesan HTML Telegram
-│   └── notifier_runner.py      # Helper async notifikasi
-│
-└── scheduler/
-    └── job_scheduler.py        # APScheduler (cron jobs)
+ main.py                  # FastAPI app
+ manage.py                # CLI VPS management
+ config.py                # Settings dari .env
+ requirements.txt
+ .env
+ data/
+    fetcher.py           # Yahoo Finance + auto-save store
+    stock_list.py        # IDX Universe (~342 saham)
+    dynamic_screener.py  # Pre-screener batch
+    store.py             # Parquet OHLCV database
+    signal_cache.py      # Signal JSON cache (per hari)
+    store/               # Data files (auto-created)
+ screener/
+    indicators.py
+    signal_generator.py
+    scanner.py           # Dua-tahap scan + cache-aware
+ telegram_bot/
+    bot.py               # Handler + admin commands
+    formatter.py
+    notifier_runner.py
+ scheduler/
+    job_scheduler.py     # APScheduler BEI
+ logs/
+     app.log
 ```
 
 ---
 
-## ⚠️ Disclaimer
+##  Disclaimer
 
-> Sistem ini adalah **alat bantu analisis teknikal** semata. Sinyal yang dihasilkan bukan merupakan rekomendasi investasi. Selalu lakukan riset mandiri (DYOR) sebelum mengambil keputusan trading. **Risiko trading ditanggung penuh oleh trader masing-masing.**
-
----
-
-## 📌 Tips Scalping
-
-- Gunakan saham dengan **volume tinggi** (BBCA, BBRI, BMRI, TLKM, ASII)
-- Buka posisi hanya di **sesi aktif**: 09:15–11:00 dan 13:45–14:45
-- Jangan buka posisi **5 menit pertama** (09:00–09:05) — terlalu volatile
-- Perhatikan **VWAP**: beli di bawah VWAP (lebih aman), jual di atas VWAP
-- Minimal **RR 1:2** — jangan ambil trade dengan risiko lebih besar dari reward
-- **Volume ratio > 1.5x** = konfirmasi sinyal lebih kuat
+Sistem ini adalah **alat bantu analisis teknikal** semata, bukan rekomendasi investasi. Selalu lakukan riset mandiri (DYOR). **Risiko trading ditanggung penuh oleh trader.**

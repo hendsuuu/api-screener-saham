@@ -211,32 +211,64 @@ class StockScanner:
         self.last_scan_results = filtered
         from datetime import datetime
         self.last_scan_time = datetime.now().isoformat()
+
+        # Simpan ke disk agar /buy dan /waspada bisa baca data
+        # meskipun bot berjalan di proses terpisah atau server restart
+        if filtered:
+            try:
+                from data.signal_cache import save_signals
+                save_signals(filtered, self.last_scan_time)
+            except Exception as _ce:
+                logger.debug(f"Signal cache write skip: {_ce}")
+
         return filtered
 
     def get_top_signals(self, n: int = 5) -> List[ScalpSignal]:
-        """Ambil N sinyal teratas dari scan terakhir."""
-        return self.last_scan_results[:n]
+        """Ambil N sinyal teratas dari scan terakhir (cek disk jika memory kosong)."""
+        results = self._get_results_with_cache()
+        return results[:n]
+
+    def _get_results_with_cache(self, signal_type: Optional[str] = None) -> List[ScalpSignal]:
+        """
+        Kembalikan sinyal dari memory.
+        Jika memory kosong (belum scan sejak restart), coba load dari cache disk.
+        """
+        if not self.last_scan_results:
+            try:
+                from data.signal_cache import load_signals_today
+                cached = load_signals_today()
+                if cached:
+                    logger.info(
+                        f"[Scanner] Memory kosong, load {len(cached)} sinyal dari cache disk"
+                    )
+                    self.last_scan_results = cached
+                    # Ambil scan_time dari cache
+                    if not self.last_scan_time:
+                        self.last_scan_time = cached[0].timestamp if cached else None
+            except Exception as e:
+                logger.debug(f"[Scanner] Gagal load cache: {e}")
+
+        results = self.last_scan_results
+        if signal_type:
+            results = [s for s in results if s.signal_type == signal_type]
+        return results
 
     def get_market_summary(self) -> Dict:
         """
         Ringkasan kondisi pasar berdasarkan scan terakhir.
+        Jika memory kosong, otomatis load dari cache disk.
         """
-        if not self.last_scan_results:
+        results = self._get_results_with_cache()
+        if not results:
             return {"status": "Belum ada data scan"}
 
-        total = len(self.last_scan_results)
-        buy_count = sum(
-            1 for s in self.last_scan_results if s.signal_type == "BUY")
-        sell_count = sum(
-            1 for s in self.last_scan_results if s.signal_type == "SELL")
-        strong_count = sum(
-            1 for s in self.last_scan_results if s.strength == "STRONG")
-        avg_score = sum(
-            s.signal_score for s in self.last_scan_results) / total if total > 0 else 0
-
-        # Hitung rata-rata RSI sebagai indikator market breadth
-        avg_rsi = sum(s.rsi for s in self.last_scan_results) / \
-            total if total > 0 else 50
+        total = len(results)
+        buy_count = sum(1 for s in results if s.signal_type == "BUY")
+        # WASPADA adalah pengganti SELL di BEI
+        sell_count = sum(1 for s in results if s.signal_type in ("WASPADA", "SELL"))
+        strong_count = sum(1 for s in results if s.strength == "STRONG")
+        avg_score = sum(s.signal_score for s in results) / total if total > 0 else 0
+        avg_rsi = sum(s.rsi for s in results) / total if total > 0 else 50
 
         if buy_count > sell_count * 1.5:
             market_bias = "BULLISH"
@@ -257,14 +289,14 @@ class StockScanner:
             "top_buys": [
                 {"ticker": s.ticker_clean, "score": s.signal_score,
                     "entry": s.entry_price, "tp2": s.tp2}
-                for s in self.last_scan_results
+                for s in results
                 if s.signal_type == "BUY"
             ][:3],
             "top_sells": [
                 {"ticker": s.ticker_clean, "score": s.signal_score,
-                    "entry": s.entry_price, "tp2": s.tp2}
-                for s in self.last_scan_results
-                if s.signal_type == "SELL"
+                    "entry": s.entry_price}
+                for s in results
+                if s.signal_type in ("WASPADA", "SELL")
             ][:3],
         }
 
