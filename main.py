@@ -1,0 +1,474 @@
+"""
+Main FastAPI Application - API Screener Saham Indonesia
+Endpoint untuk sinyal scalping, status pasar, dan trigger manual scan
+"""
+
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import List, Optional
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, Depends, Query, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+
+from config import settings
+from data.fetcher import StockDataFetcher
+from data.stock_list import SCALPING_WATCHLIST, get_yahoo_symbol
+from screener.scanner import StockScanner
+from screener.signal_generator import ScalpSignal
+from scheduler.job_scheduler import ScanScheduler
+from telegram_bot.bot import TelegramNotifier, TelegramBotHandler
+from telegram_bot.formatter import TelegramFormatter
+
+# Setup logging
+logging.basicConfig(
+    level=logging.DEBUG if settings.DEBUG else logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+# ─── Global instances ────────────────────────
+fetcher = StockDataFetcher()
+scanner = StockScanner(max_workers=settings.MAX_SCAN_WORKERS)
+notifier = TelegramNotifier(
+    settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_IDS)
+formatter = TelegramFormatter()
+scheduler: Optional[ScanScheduler] = None
+bot_handler: Optional[TelegramBotHandler] = None
+
+
+# ─── Lifespan (startup/shutdown) ─────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup dan shutdown hooks."""
+    global scheduler, bot_handler
+
+    logger.info("=== SAHAM SCALPER API STARTING ===")
+
+    # Validasi config
+    try:
+        settings.validate()
+    except ValueError as e:
+        logger.warning(f"Config warning: {e}")
+
+    # Test koneksi Telegram
+    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN != "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ":
+        connected = await notifier.test_connection()
+        if connected:
+            logger.info("✅ Telegram bot terhubung")
+        else:
+            logger.warning("⚠️ Telegram bot tidak terhubung")
+
+    # Setup dan mulai scheduler
+    scheduler = ScanScheduler(
+        scanner=scanner,
+        fetcher=fetcher,
+        telegram_token=settings.TELEGRAM_BOT_TOKEN,
+        chat_ids=settings.TELEGRAM_CHAT_IDS,
+        scan_interval_minutes=settings.SCAN_INTERVAL_MINUTES,
+    )
+    scheduler.start()
+    logger.info("✅ Scheduler dimulai")
+
+    logger.info(
+        f"✅ API berjalan di http://{settings.API_HOST}:{settings.API_PORT}")
+    logger.info("=== SIAP MELAYANI PERMINTAAN ===")
+
+    yield  # === Aplikasi berjalan ===
+
+    # Shutdown
+    logger.info("=== SAHAM SCALPER API SHUTTING DOWN ===")
+    if scheduler:
+        scheduler.stop()
+    logger.info("Shutdown selesai")
+
+
+# ─── FastAPI App ─────────────────────────────
+app = FastAPI(
+    title="Saham Scalper API",
+    description="""
+## 📈 API Screener Saham Indonesia + Telegram Notifier
+
+Sistem screener saham IDX/BEI dengan strategi **scalping intraday** yang mencari peluang profit **2-3%**.
+
+### Fitur:
+- Scan otomatis 35+ saham LQ45/IDX30
+- Sinyal BUY/SELL dengan Entry, TP1/TP2/TP3, SL
+- Analisis multi-indikator (RSI, MACD, Bollinger, VWAP, ADX, SuperTrend)
+- Notifikasi otomatis ke Telegram (grup/pribadi)
+- Scheduler berbasis jam bursa BEI
+
+### Data Source:
+- Yahoo Finance (`yfinance`) - data intraday 5 menit
+- Saham Indonesia suffix `.JK`
+    """,
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── Auth (simple bearer token) ──────────────
+security = HTTPBearer(auto_error=False)
+
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if settings.API_SECRET_KEY == "changeme-secret-key":
+        return True  # Skip auth jika masih key default
+    if not credentials or credentials.credentials != settings.API_SECRET_KEY:
+        raise HTTPException(status_code=401, detail="API key tidak valid")
+    return True
+
+
+# ════════════════════════════════════════════════
+# PYDANTIC MODELS (Response Schema)
+# ════════════════════════════════════════════════
+
+class SignalResponse(BaseModel):
+    ticker: str
+    ticker_clean: str
+    company_name: str
+    signal_type: str
+    strength: str
+    signal_score: int
+    entry_price: float
+    entry_zone_low: float
+    entry_zone_high: float
+    tp1: float
+    tp2: float
+    tp3: float
+    sl: float
+    rr_ratio: float
+    target_pct: float
+    sl_pct: float
+    rsi: float
+    macd_signal: str
+    volume_ratio: float
+    trend: str
+    bb_position: str
+    atr: float
+    atr_pct: float
+    current_price: float
+    open_price: float
+    high_day: float
+    low_day: float
+    change_pct: float
+    volume: int
+    candle_pattern: str
+    vwap: float
+    price_vs_vwap: str
+    support: float
+    resistance: float
+    reasons: List[str]
+    timestamp: str
+
+
+class ScanRequest(BaseModel):
+    tickers: Optional[List[str]] = None
+    min_score: int = 55
+    min_volume_ratio: float = 1.2
+    signal_filter: Optional[str] = None  # "BUY", "SELL", None
+    send_telegram: bool = False
+
+
+class MarketStatusResponse(BaseModel):
+    status: str
+    session: str
+    is_open: bool
+    time_wib: str
+    date: str
+
+
+def signal_to_response(s: ScalpSignal) -> SignalResponse:
+    return SignalResponse(
+        ticker=s.ticker,
+        ticker_clean=s.ticker_clean,
+        company_name=s.company_name,
+        signal_type=s.signal_type,
+        strength=s.strength,
+        signal_score=s.signal_score,
+        entry_price=s.entry_price,
+        entry_zone_low=s.entry_zone_low,
+        entry_zone_high=s.entry_zone_high,
+        tp1=s.tp1, tp2=s.tp2, tp3=s.tp3, sl=s.sl,
+        rr_ratio=s.rr_ratio,
+        target_pct=s.target_pct,
+        sl_pct=s.sl_pct,
+        rsi=s.rsi,
+        macd_signal=s.macd_signal,
+        volume_ratio=s.volume_ratio,
+        trend=s.trend,
+        bb_position=s.bb_position,
+        atr=s.atr,
+        atr_pct=s.atr_pct,
+        current_price=s.current_price,
+        open_price=s.open_price,
+        high_day=s.high_day,
+        low_day=s.low_day,
+        change_pct=s.change_pct,
+        volume=s.volume,
+        candle_pattern=s.candle_pattern,
+        vwap=s.vwap,
+        price_vs_vwap=s.price_vs_vwap,
+        support=s.support,
+        resistance=s.resistance,
+        reasons=s.reasons,
+        timestamp=s.timestamp,
+    )
+
+
+# ════════════════════════════════════════════════
+# ENDPOINTS
+# ════════════════════════════════════════════════
+
+@app.get("/", tags=["Info"])
+async def root():
+    """Info API dan status."""
+    market = fetcher.get_market_status()
+    return {
+        "name": "Saham Scalper API",
+        "version": "1.0.0",
+        "description": "IDX Stock Screener dengan sinyal scalping intraday",
+        "market": market,
+        "docs": "/docs",
+        "endpoints": {
+            "scan_all": "POST /scan",
+            "scan_stock": "GET /signal/{ticker}",
+            "top_signals": "GET /signals/top",
+            "market_status": "GET /market",
+            "watchlist": "GET /watchlist",
+            "scheduler_jobs": "GET /scheduler/jobs",
+            "manual_trigger": "POST /scheduler/trigger",
+        }
+    }
+
+
+@app.get("/market", response_model=MarketStatusResponse, tags=["Market"])
+async def get_market_status():
+    """Status pasar BEI saat ini."""
+    return fetcher.get_market_status()
+
+
+@app.get("/watchlist", tags=["Market"])
+async def get_watchlist():
+    """Daftar saham dalam watchlist screener."""
+    return {
+        "total": len(SCALPING_WATCHLIST),
+        "tickers": SCALPING_WATCHLIST,
+        "description": "Saham-saham LQ45/IDX30 pilihan untuk scalping"
+    }
+
+
+@app.post("/scan", response_model=List[SignalResponse], tags=["Screener"])
+async def run_scan(
+    req: ScanRequest,
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    Jalankan scan screener.
+
+    - **tickers**: (opsional) Kode saham custom, default: seluruh watchlist
+    - **min_score**: Skor minimum 0-100 (default: 55)
+    - **signal_filter**: Filter "BUY"/"SELL"/null
+    - **send_telegram**: Kirim hasil ke Telegram
+    """
+    try:
+        signals = await scanner.scan_all_async(
+            watchlist=req.tickers,
+            min_score=req.min_score,
+            signal_filter=req.signal_filter
+        )
+
+        if req.send_telegram and signals:
+            market = fetcher.get_market_status()
+            background_tasks.add_task(
+                _send_telegram_background,
+                signals,
+                market
+            )
+
+        return [signal_to_response(s) for s in signals]
+
+    except Exception as e:
+        logger.error(f"Error scan: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _send_telegram_background(signals, market):
+    """Background task untuk kirim Telegram."""
+    try:
+        await notifier.send_summary(signals, market)
+        await asyncio.sleep(2)
+        await notifier.send_signals_batch(signals, max_signals=settings.MAX_SIGNALS_PER_SCAN)
+    except Exception as e:
+        logger.error(f"Error send telegram background: {e}")
+
+
+@app.get("/signal/{ticker}", response_model=Optional[SignalResponse], tags=["Screener"])
+async def get_signal_for_ticker(
+    ticker: str,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    Dapatkan sinyal untuk satu saham.
+
+    - **ticker**: Kode saham (contoh: BBCA, BBRI, TLKM)
+    """
+    ticker_clean = ticker.upper().strip().replace(".JK", "")
+    signal = scanner.scan_single_stock(ticker_clean)
+
+    if signal is None:
+        return None
+
+    return signal_to_response(signal)
+
+
+@app.get("/signals/top", response_model=List[SignalResponse], tags=["Screener"])
+async def get_top_signals(
+    n: int = Query(default=5, ge=1, le=20,
+                   description="Jumlah sinyal teratas"),
+    signal_type: Optional[str] = Query(
+        default=None, description="Filter: BUY atau SELL"),
+):
+    """
+    Tampilkan N sinyal teratas dari scan terakhir.
+    Gunakan /scan dahulu untuk memperbarui data.
+    """
+    signals = scanner.last_scan_results
+
+    if signal_type:
+        signals = [s for s in signals if s.signal_type == signal_type.upper()]
+
+    top = signals[:n]
+    return [signal_to_response(s) for s in top]
+
+
+@app.get("/signals/summary", tags=["Screener"])
+async def get_market_summary():
+    """Ringkasan kondisi pasar dari scan terakhir."""
+    market = fetcher.get_market_status()
+    summary = scanner.get_market_summary()
+    return {
+        "market_status": market,
+        "scan_summary": summary
+    }
+
+
+@app.post("/telegram/test", tags=["Telegram"])
+async def test_telegram(_: bool = Depends(verify_api_key)):
+    """Test koneksi dan kirim pesan test ke Telegram."""
+    connected = await notifier.test_connection()
+    if not connected:
+        raise HTTPException(status_code=503, detail="Bot tidak terhubung")
+
+    await notifier.send_message(
+        "✅ <b>Test Notifikasi Berhasil!</b>\n"
+        "Bot Saham Scalper terhubung dan siap mengirim sinyal."
+    )
+    return {"status": "success", "message": "Pesan test terkirim"}
+
+
+@app.post("/telegram/send-signal/{ticker}", tags=["Telegram"])
+async def send_signal_to_telegram(
+    ticker: str,
+    _: bool = Depends(verify_api_key)
+):
+    """Kirim sinyal saham tertentu ke Telegram secara manual."""
+    ticker_clean = ticker.upper().strip().replace(".JK", "")
+    signal = scanner.scan_single_stock(ticker_clean)
+
+    if signal is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tidak ada sinyal untuk {ticker_clean}"
+        )
+
+    success = await notifier.send_signal(signal)
+    return {
+        "status": "sent" if success else "failed",
+        "ticker": ticker_clean,
+        "signal_type": signal.signal_type,
+        "score": signal.signal_score
+    }
+
+
+@app.get("/scheduler/jobs", tags=["Scheduler"])
+async def get_scheduler_jobs(_: bool = Depends(verify_api_key)):
+    """Informasi semua job scheduler yang aktif."""
+    if scheduler is None:
+        return {"status": "scheduler belum diinisialisasi", "jobs": []}
+    return {
+        "total_jobs": len(scheduler.scheduler.get_jobs()),
+        "jobs": scheduler.get_jobs_info()
+    }
+
+
+@app.post("/scheduler/trigger", tags=["Scheduler"])
+async def trigger_manual_scan(
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    Trigger scan manual di luar jadwal.
+    Hasilnya dikirim ke Telegram.
+    """
+    background_tasks.add_task(_manual_trigger_scan)
+    return {"status": "scanning", "message": "Scan manual dimulai, hasil dikirim ke Telegram"}
+
+
+async def _manual_trigger_scan():
+    """Background task scan manual."""
+    try:
+        signals = await scanner.scan_all_async(min_score=settings.MIN_SIGNAL_SCORE)
+        market = fetcher.get_market_status()
+        await notifier.send_summary(signals, market)
+        if signals:
+            await asyncio.sleep(2)
+            await notifier.send_signals_batch(signals, max_signals=settings.MAX_SIGNALS_PER_SCAN)
+    except Exception as e:
+        logger.error(f"Error manual trigger: {e}", exc_info=True)
+
+
+# ════════════════════════════════════════════════
+# ENTRY POINT
+# ════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    import sys
+
+    # Mode: api (default) atau bot (polling mode)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "api"
+
+    if mode == "bot":
+        # Jalankan Telegram bot dalam mode polling (tanpa API server)
+        logger.info("Menjalankan dalam mode BOT POLLING...")
+        bot = TelegramBotHandler(
+            token=settings.TELEGRAM_BOT_TOKEN,
+            chat_ids=settings.TELEGRAM_CHAT_IDS,
+            scanner=scanner
+        )
+        bot.run_polling()
+    else:
+        # Jalankan API server
+        logger.info(f"Menjalankan API server di port {settings.API_PORT}...")
+        uvicorn.run(
+            "main:app",
+            host=settings.API_HOST,
+            port=settings.API_PORT,
+            reload=settings.DEBUG,
+            log_level="debug" if settings.DEBUG else "info"
+        )

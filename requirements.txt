@@ -1,0 +1,41 @@
+# ═══════════════════════════════════════════════════
+#  SAHAM SCALPER BOT - Dependencies
+#  Install: pip install -r requirements.txt
+# ═══════════════════════════════════════════════════
+
+# ─── Web Framework ──────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# ─── Data Source (Yahoo Finance) ────────────────
+yfinance==0.2.50
+pandas==2.2.3
+numpy==1.26.4
+
+# ─── Telegram Bot ───────────────────────────────
+python-telegram-bot==21.7
+
+# ─── Scheduler ──────────────────────────────────
+APScheduler==3.10.4
+
+# ─── Environment & Config ───────────────────────
+python-dotenv==1.0.1
+pydantic==2.10.3
+
+# ─── Timezone support ───────────────────────────
+pytz==2024.2
+
+# ─── HTTP Client (digunakan yfinance) ───────────
+requests==2.32.3
+httpx==0.28.1
+
+# ─── Data & Analysis ────────────────────────────
+scipy==1.14.1
+ta==0.11.0          # Technical Analysis library (opsional, backup)
+
+# ─── Logging & Monitoring ───────────────────────
+loguru==0.7.3
+
+# ─── Development Tools ──────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0

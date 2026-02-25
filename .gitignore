@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.env/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test results
+htmlcov/
+.coverage
+
+# Misc
+*.swp
+*.bak
+
+# Environment variables
+.env
+.env.*
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+
+# Others
+*.sqlite3
+*.db
+
+# Git
+.git/
