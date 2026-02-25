@@ -7,23 +7,23 @@ Dilengkapi persistent OHLCV database (Parquet), crawling historis, structured er
 
 ## ✨ Fitur Utama
 
-| Fitur | Detail |
-|---|---|
-| 🗄️ Data Store | OHLCV tersimpan Parquet per-ticker — baca lokal tanpa live API |
-| 🕷️ Data Crawler | Crawl historis 5 tahun + intraday 60 hari, update otomatis jam 04:00 |
-| 🌐 Data Source | Yahoo Finance (`yfinance 1.2.0`) dengan Chrome impersonation |
-| 🎯 Strategi | Scalping intraday, target profit **2–3%** per trade |
-| 🟢 Sinyal BUY | Entry Zone, TP1/TP2/TP3, Stop Loss, Risk:Reward |
-| 🔴 Sinyal WASPADA | Peringatan kondisi bearish (BEI tidak ada short-selling) |
-| 🤖 Telegram Bot | Notifikasi otomatis + command interaktif + admin commands |
-| ⏱️ Auto Scheduler | 04:00 update data — 06:00 kirim max **10 BUY + 10 WASPADA** |
-| 📊 Indikator | EMA 9/20/50, RSI, MACD, Bollinger Bands, VWAP, ADX, ATR, SuperTrend |
-| 🔍 Pre-Screener | Filter ~342 saham IDX berdasarkan volume, nilai & momentum harga |
-| 🧠 /info Ticker | Analisis mendalam: trend, S/R zones, potensi, risiko, confidence score |
-| 💾 Signal Cache | Sinyal tersimpan JSON per hari — `/buy` & `/waspada` aktif setelah restart |
-| 🖥️ CLI Management | `manage.py` untuk kontrol VPS: start/stop/status/get-data/scan/store |
-| 🔐 Admin Commands | Command pribadi via Telegram khusus pemilik bot |
-| 📋 Error Logging | Structured JSON log per request gagal + API `/errors/recent` |
+| Fitur             | Detail                                                                     |
+| ----------------- | -------------------------------------------------------------------------- |
+| 🗄️ Data Store     | OHLCV tersimpan Parquet per-ticker — baca lokal tanpa live API             |
+| 🕷️ Data Crawler   | Crawl historis 5 tahun + intraday 60 hari, update otomatis jam 04:00       |
+| 🌐 Data Source    | Yahoo Finance (`yfinance 1.2.0`) dengan Chrome impersonation               |
+| 🎯 Strategi       | Scalping intraday, target profit **2–3%** per trade                        |
+| 🟢 Sinyal BUY     | Entry Zone, TP1/TP2/TP3, Stop Loss, Risk:Reward                            |
+| 🔴 Sinyal WASPADA | Peringatan kondisi bearish (BEI tidak ada short-selling)                   |
+| 🤖 Telegram Bot   | Notifikasi otomatis + command interaktif + admin commands                  |
+| ⏱️ Auto Scheduler | 04:00 update data — 06:00 kirim max **10 BUY + 10 WASPADA**                |
+| 📊 Indikator      | EMA 9/20/50, RSI, MACD, Bollinger Bands, VWAP, ADX, ATR, SuperTrend        |
+| 🔍 Pre-Screener   | Filter ~342 saham IDX berdasarkan volume, nilai & momentum harga           |
+| 🧠 /info Ticker   | Analisis mendalam: trend, S/R zones, potensi, risiko, confidence score     |
+| 💾 Signal Cache   | Sinyal tersimpan JSON per hari — `/buy` & `/waspada` aktif setelah restart |
+| 🖥️ CLI Management | `manage.py` untuk kontrol VPS: start/stop/status/get-data/scan/store       |
+| 🔐 Admin Commands | Command pribadi via Telegram khusus pemilik bot                            |
+| 📋 Error Logging  | Structured JSON log per request gagal + API `/errors/recent`               |
 
 ---
 
@@ -79,7 +79,7 @@ TELEGRAM_CHAT_IDS=-100123456789
 ADMIN_CHAT_IDS=123456789          # Cari ID Anda di @userinfobot
 
 API_SECRET_KEY=ganti-dengan-key-anda
-MIN_SIGNAL_SCORE=60
+MIN_SIGNAL_SCORE=50
 
 DATA_STORE_PATH=data/store
 CRAWL_HISTORICAL_PERIOD=5y        # Periode historis harian
@@ -154,31 +154,31 @@ Buka `http://localhost:8000/docs` setelah server berjalan.
 
 ### Screener
 
-| Endpoint | Method | Deskripsi |
-|---|---|---|
-| `/scan` | POST | Jalankan scan screener |
-| `/signal/{ticker}` | GET | Sinyal 1 saham |
-| `/signals/top` | GET | Top N sinyal terbaru |
-| `/signals/summary` | GET | Ringkasan market |
-| `/scheduler/trigger` | POST | Trigger scan manual |
-| `/prescreen/run` | POST | Jalankan pre-screener |
-| `/prescreen/criteria` | PATCH | Hot-reload kriteria filter |
+| Endpoint              | Method | Deskripsi                  |
+| --------------------- | ------ | -------------------------- |
+| `/scan`               | POST   | Jalankan scan screener     |
+| `/signal/{ticker}`    | GET    | Sinyal 1 saham             |
+| `/signals/top`        | GET    | Top N sinyal terbaru       |
+| `/signals/summary`    | GET    | Ringkasan market           |
+| `/scheduler/trigger`  | POST   | Trigger scan manual        |
+| `/prescreen/run`      | POST   | Jalankan pre-screener      |
+| `/prescreen/criteria` | PATCH  | Hot-reload kriteria filter |
 
 ### Data Store & Crawling
 
-| Endpoint | Method | Deskripsi |
-|---|---|---|
-| `/data/fetch` | POST | Trigger crawl historis (background) |
-| `/data/update` | POST | Trigger incremental update (background) |
-| `/data/status` | GET | Progress crawl + statistik store |
+| Endpoint       | Method | Deskripsi                               |
+| -------------- | ------ | --------------------------------------- |
+| `/data/fetch`  | POST   | Trigger crawl historis (background)     |
+| `/data/update` | POST   | Trigger incremental update (background) |
+| `/data/status` | GET    | Progress crawl + statistik store        |
 
 ### Error Logging
 
-| Endpoint | Method | Deskripsi |
-|---|---|---|
-| `/errors/recent` | GET | N error request terbaru |
-| `/errors/stats` | GET | Breakdown error per ticker/operasi/jam |
-| `/errors/clear` | DELETE | Reset buffer error in-memory |
+| Endpoint         | Method | Deskripsi                              |
+| ---------------- | ------ | -------------------------------------- |
+| `/errors/recent` | GET    | N error request terbaru                |
+| `/errors/stats`  | GET    | Breakdown error per ticker/operasi/jam |
+| `/errors/clear`  | DELETE | Reset buffer error in-memory           |
 
 ---
 
@@ -186,28 +186,55 @@ Buka `http://localhost:8000/docs` setelah server berjalan.
 
 ### Publik
 
-| Command | Fungsi |
-|---|---|
-| `/start` | Sambutan + ringkasan fitur |
-| `/scan` | Scan IDX sekarang, kirim sinyal terbaik |
-| `/top` | Top 5 sinyal (dari cache jika server baru restart) |
-| `/signal BBCA` | Analisis teknikal + sinyal satu saham |
-| `/info BBCA` | 🧠 Analisis mendalam: trend, S/R zones, potensi, risiko, confidence |
-| `/buy` | Daftar sinyal BUY hari ini (max 10) |
-| `/waspada` | Daftar saham kondisi bearish hari ini (max 10) |
-| `/market` | Status pasar + ringkasan scan terakhir |
+| Command        | Fungsi                                                                    |
+| -------------- | ------------------------------------------------------------------------- |
+| `/start`       | Sambutan + ringkasan fitur                                                |
+| `/scan`        | Scan IDX sekarang, kirim sinyal terbaik                                   |
+| `/top`         | Top 5 sinyal (dari cache jika server baru restart)                        |
+| `/signal BBCA` | Analisis teknikal + sinyal satu saham                                     |
+| `/info BBCA`   | 🧠 Analisis mendalam: trend, S/R zones, potensi, risiko, confidence       |
+| `/buy`         | Daftar sinyal BUY hari ini (max 10)                                       |
+| `/waspada`     | Daftar saham kondisi bearish hari ini (max 10)                            |
+| `/market`      | Status pasar + ringkasan scan terakhir                                    |
+| `/stocklist`   | 📋 Daftar semua saham di universe, dikelompokkan per sektor               |
+| `/cek BBCA`    | 🔎 Cek apakah ticker ada di universe (bisa banyak: `/cek BBCA TLKM ASII`) |
 
 > 💡 Ketik kode saham langsung (contoh: `BBCA`) → bot otomatis analisis dengan `/signal`!
 
 ### Admin (`ADMIN_CHAT_IDS`)
 
-| Command | Fungsi |
-|---|---|
-| `/admin status` | Status server + store + scan terakhir |
-| `/admin scan` | Paksa scan, hasil dikirim langsung ke Anda |
-| `/admin store` | Statistik data store |
-| `/admin logs [30]` | N baris terakhir app.log |
-| `/admin prescreen` | Jalankan pre-screener manual |
+| Command                 | Fungsi                                                       |
+| ----------------------- | ------------------------------------------------------------ |
+| `/admin status`         | Status server + store + scan terakhir                        |
+| `/admin scan`           | Paksa scan, hasil dikirim langsung ke Anda                   |
+| `/admin store`          | Statistik data store                                         |
+| `/admin logs [30]`      | N baris terakhir app.log                                     |
+| `/admin prescreen`      | Jalankan pre-screener manual                                 |
+| `/addstock KODE [Nama]` | ➕ Tambahkan saham baru ke custom list (langsung fetch data) |
+| `/removestock KODE`     | ➖ Hapus saham dari custom list                              |
+
+#### Manajemen Custom Stock List
+
+Bot mendukung penambahan saham di luar `IDX_UNIVERSE` bawaan.  
+Daftar saham custom disimpan di `data/custom_stocks.json` dan **otomatis digabung** ke universe saat scan.
+
+```bash
+# Tambah saham dengan nama perusahaan
+/addstock ACES Ace Hardware Indonesia
+
+# Tambah tanpa nama (nama akan dikosongkan)
+/addstock KODE
+
+# Hapus saham custom
+/removestock KODE
+
+# Lihat daftar lengkap (publik)
+/stocklist
+```
+
+Setelah `/addstock` berhasil, bot secara otomatis men-_crawl_ data 5m historis saham tersebut sehingga siap digunakan pada scan berikutnya.
+
+> ⚠️ Saham yang sudah ada di `IDX_UNIVERSE` bawaan tidak bisa ditambahkan ulang — sudah otomatis termasuk.
 
 ---
 
@@ -230,7 +257,25 @@ data/store/
 └── signals_2026-02-24.json  # Riwayat 7 hari
 ```
 
+**`data/custom_stocks.json`** — Penyimpanan saham tambahan yang dimasukkan via bot Telegram.
+
+```json
+{
+  "stocks": [
+    {
+      "ticker": "ACES",
+      "name": "Ace Hardware Indonesia",
+      "added_by": "123456789",
+      "added_at": "2026-02-25T10:00:00Z"
+    }
+  ]
+}
+```
+
+Setiap crawler run (otomatis 04:00 WIB atau manual `/admin scan`) akan menyertakan saham custom ini.
+
 **Logika akumulatif (upsert):**
+
 ```
 Data lama  :  [1, 2, 3, 4, 5]
 Data baru  :        [3, 4, 5, 6, 7]
@@ -239,11 +284,11 @@ Hasil disk :  [1, 2, 3, 4, 5, 6, 7]   — tidak ada yang dihapus, duplikat di-ov
 
 ### Estimasi Kapasitas
 
-| Data | Ukuran per Saham | Total ~342 Saham |
-|---|---|---|
-| 5m · 60 hari | ~100 KB | ~34 MB |
-| 5m · 730 hari | ~1.2 MB | ~420 MB |
-| 1d · 5 tahun | ~15 KB | ~5 MB |
+| Data          | Ukuran per Saham | Total ~342 Saham |
+| ------------- | ---------------- | ---------------- |
+| 5m · 60 hari  | ~100 KB          | ~34 MB           |
+| 5m · 730 hari | ~1.2 MB          | ~420 MB          |
+| 1d · 5 tahun  | ~15 KB           | ~5 MB            |
 
 ### Error Logging (Structured)
 
@@ -254,6 +299,7 @@ logs/
 ```
 
 Format tiap entry:
+
 ```json
 {
   "time": "2026-02-25T09:23:47.123",
@@ -269,13 +315,13 @@ Format tiap entry:
 
 ## ⏰ Jadwal Scheduler
 
-| Waktu (WIB) | Aksi |
-|---|---|
-| 04:00 | 🔄 **Update data store** — ambil candle terbaru semua interval (5m, 15m, 1h, 1d) |
-| 06:00 | 📨 **Kirim sinyal pagi** — max 10 BUY + max 10 WASPADA (confidence >= 60) |
-| 09:00 | 🔔 Notifikasi pasar **BUKA** |
-| 15:45 | ⚠️ Notifikasi pre-close (15 menit sebelum tutup) |
-| 16:00 | 🔕 Notifikasi pasar **TUTUP** |
+| Waktu (WIB) | Aksi                                                                             |
+| ----------- | -------------------------------------------------------------------------------- |
+| 04:00       | 🔄 **Update data store** — ambil candle terbaru semua interval (5m, 15m, 1h, 1d) |
+| 06:00       | 📨 **Kirim sinyal pagi** — max 10 BUY + max 10 WASPADA (confidence >= 60)        |
+| 09:00       | 🔔 Notifikasi pasar **BUKA**                                                     |
+| 15:45       | ⚠️ Notifikasi pre-close (15 menit sebelum tutup)                                 |
+| 16:00       | 🔕 Notifikasi pasar **TUTUP**                                                    |
 
 > - Data di-fetch **sekali sehari jam 04:00** — tidak ada polusi API tiap 15 menit
 > - Sinyal dikirim jam **06:00** sehingga trader punya waktu riset penuh sebelum pasar buka (09:00)
@@ -284,18 +330,19 @@ Format tiap entry:
 
 ## 📊 Scoring Sinyal (0–100 poin)
 
-| Kriteria | Bobot |
-|---|---|
+| Kriteria                      | Bobot  |
+| ----------------------------- | ------ |
 | Trend Alignment (EMA 9/20/50) | 25 pts |
-| MACD Konfirmasi | 20 pts |
-| RSI Kondisi | 20 pts |
-| Volume Ratio | 15 pts |
-| ADX Trend Strength | 10 pts |
-| Candlestick Pattern | 10 pts |
+| MACD Konfirmasi               | 20 pts |
+| RSI Kondisi                   | 20 pts |
+| Volume Ratio                  | 15 pts |
+| ADX Trend Strength            | 10 pts |
+| Candlestick Pattern           | 10 pts |
 
 **Kekuatan sinyal:** 🟢 STRONG (>= 75) · 🟡 MODERATE (55–74) · 🔴 WEAK (45–54)
 
 **Jenis sinyal:**
+
 - 🟢 **BUY** — kondisi bullish, dilengkapi Entry / TP1 / TP2 / TP3 / SL / Risk:Reward
 - 🔴 **WASPADA** — kondisi bearish, **BUKAN short signal** (BEI melarang short selling)
 
@@ -343,17 +390,17 @@ api_saham/
 
 ## 📦 Dependency Utama
 
-| Package | Versi | Fungsi |
-|---|---|---|
-| `yfinance` | 1.2.0 | Data saham Yahoo Finance (wajib versi 1.x) |
-| `curl_cffi` | >= 0.7 | Chrome impersonation untuk bypass rate-limit YF |
-| `fastapi` | 0.115.5 | REST API framework |
-| `python-telegram-bot` | 21.7 | Telegram Bot SDK |
-| `APScheduler` | 3.10.4 | Scheduler jam bursa (CronTrigger) |
-| `pyarrow` | >= 14.0.0 | Engine Parquet — persistent OHLCV store |
-| `pandas` | 2.2.3 | Data manipulation & analisis |
-| `loguru` | 0.7.3 | Structured logging |
-| `tqdm` | 4.66.0 | Progress bar saat crawling |
+| Package               | Versi     | Fungsi                                          |
+| --------------------- | --------- | ----------------------------------------------- |
+| `yfinance`            | 1.2.0     | Data saham Yahoo Finance (wajib versi 1.x)      |
+| `curl_cffi`           | >= 0.7    | Chrome impersonation untuk bypass rate-limit YF |
+| `fastapi`             | 0.115.5   | REST API framework                              |
+| `python-telegram-bot` | 21.7      | Telegram Bot SDK                                |
+| `APScheduler`         | 3.10.4    | Scheduler jam bursa (CronTrigger)               |
+| `pyarrow`             | >= 14.0.0 | Engine Parquet — persistent OHLCV store         |
+| `pandas`              | 2.2.3     | Data manipulation & analisis                    |
+| `loguru`              | 0.7.3     | Structured logging                              |
+| `tqdm`                | 4.66.0    | Progress bar saat crawling                      |
 
 > ⚠️ **`yfinance` versi 0.2.x tidak kompatibel.** Gunakan versi **1.2.0**.
 > Yahoo Finance 2024+ menggunakan autentikasi baru yang membutuhkan `curl_cffi`.
@@ -374,7 +421,7 @@ API_SECRET_KEY=changeme-secret-key
 DEBUG=false
 
 # ── Screener ──────────────────────────────────────
-MIN_SIGNAL_SCORE=60
+MIN_SIGNAL_SCORE=50
 MAX_SCAN_WORKERS=8
 MIN_VOLUME_RATIO=1.2
 

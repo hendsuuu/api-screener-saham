@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import List, Optional
 
 import uvicorn
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 
 from config import settings
 from data.fetcher import StockDataFetcher
-from data.stock_list import IDX_UNIVERSE, get_yahoo_symbol
+from data.stock_list import IDX_UNIVERSE, get_yahoo_symbol, get_effective_universe
 from data.dynamic_screener import ScreenerCriteria
 from screener.scanner import StockScanner
 from screener.signal_generator import ScalpSignal
@@ -45,6 +46,47 @@ formatter = TelegramFormatter()
 scheduler: Optional[ScanScheduler] = None
 bot_handler: Optional[TelegramBotHandler] = None
 
+# ─── Single-instance lock (PID file) ─────────
+_SCHEDULER_LOCK = Path(".scheduler.lock")
+
+
+def _acquire_scheduler_lock() -> bool:
+    """
+    Coba kuasai single-instance lock untuk scheduler + bot.
+    Menggunakan PID file — jika proses lama masih hidup, return False.
+    Return True jika berhasil (proses ini boleh start scheduler/bot).
+    """
+    try:
+        if _SCHEDULER_LOCK.exists():
+            try:
+                old_pid = int(_SCHEDULER_LOCK.read_text().strip())
+                if os.name == "nt":
+                    import ctypes
+                    import ctypes.wintypes
+                    h = ctypes.windll.kernel32.OpenProcess(0x0400, False, old_pid)
+                    if h:
+                        code = ctypes.wintypes.DWORD()
+                        ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+                        ctypes.windll.kernel32.CloseHandle(h)
+                        if code.value == 259:  # STILL_ACTIVE
+                            return False
+                else:
+                    os.kill(old_pid, 0)  # raises OSError kalau proses mati
+                    return False
+            except (ValueError, ProcessLookupError, PermissionError, OSError):
+                pass  # proses lama sudah mati — ambil alih lock
+        _SCHEDULER_LOCK.write_text(str(os.getpid()))
+        return True
+    except Exception:
+        return True  # fail-open: lebih baik start daripada tidak sama sekali
+
+
+def _release_scheduler_lock():
+    try:
+        _SCHEDULER_LOCK.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 # ─── Lifespan (startup/shutdown) ─────────────
 @asynccontextmanager
@@ -60,27 +102,43 @@ async def lifespan(app: FastAPI):
     except ValueError as e:
         logger.warning(f"Config warning: {e}")
 
-    # Test koneksi Telegram
-    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN != os.getenv("TELEGRAM_BOT_TOKEN"):
+    # ── Single-instance guard ──────────────────────────────────────────────
+    # Uvicorn tidak men-set APP_WORKER_ID secara otomatis, sehingga env var
+    # tersebut tidak bisa diandalkan untuk membedakan worker.
+    # Solusi: PID file lock — hanya proses pertama yang berhasil menulis PID
+    # yang boleh menjalankan scheduler dan bot polling.
+    is_main_worker = _acquire_scheduler_lock()
+
+    if not is_main_worker:
+        logger.info(
+            f"ℹ️ PID {os.getpid()}: proses lain sudah menjalankan scheduler/bot. "
+            "Worker ini hanya melayani HTTP request."
+        )
+
+    # ── Test koneksi Telegram (hanya di main worker) ───────────────────────
+    if is_main_worker and settings.TELEGRAM_BOT_TOKEN:
         connected = await notifier.test_connection()
         if connected:
             logger.info("✅ Telegram bot terhubung")
         else:
             logger.warning("⚠️ Telegram bot tidak terhubung")
 
-    # Setup dan mulai scheduler
-    scheduler = ScanScheduler(
-        scanner=scanner,
-        fetcher=fetcher,
-        telegram_token=settings.TELEGRAM_BOT_TOKEN,
-        chat_ids=settings.TELEGRAM_CHAT_IDS,
-        scan_interval_minutes=settings.SCAN_INTERVAL_MINUTES,
-    )
-    scheduler.start()
-    logger.info("✅ Scheduler dimulai")
+    # ── Scheduler (hanya di main worker) ──────────────────────────────────
+    if is_main_worker:
+        scheduler = ScanScheduler(
+            scanner=scanner,
+            fetcher=fetcher,
+            telegram_token=settings.TELEGRAM_BOT_TOKEN,
+            chat_ids=settings.TELEGRAM_CHAT_IDS,
+            scan_interval_minutes=settings.SCAN_INTERVAL_MINUTES,
+        )
+        scheduler.start()
+        logger.info("✅ Scheduler dimulai")
+    else:
+        logger.info("ℹ️ Scheduler dilewati (bukan main worker)")
 
-    # Mulai Telegram bot handler (polling)
-    if settings.TELEGRAM_BOT_TOKEN:
+    # ── Telegram bot handler / polling (hanya di main worker) ─────────────
+    if is_main_worker and settings.TELEGRAM_BOT_TOKEN:
         bot_handler = TelegramBotHandler(
             token=settings.TELEGRAM_BOT_TOKEN,
             chat_ids=settings.TELEGRAM_CHAT_IDS,
@@ -92,8 +150,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️ Telegram bot handler gagal dimulai: {e}")
             bot_handler = None
-    else:
+    elif not settings.TELEGRAM_BOT_TOKEN:
         logger.warning("⚠️ TELEGRAM_BOT_TOKEN tidak diset, bot handler dilewati")
+    else:
+        logger.info("ℹ️ Bot polling dilewati (bukan main worker)")
 
     logger.info(
         f"✅ API berjalan di http://{settings.API_HOST}:{settings.API_PORT}")
@@ -107,6 +167,7 @@ async def lifespan(app: FastAPI):
         await bot_handler.stop_async()
     if scheduler:
         scheduler.stop()
+    _release_scheduler_lock()
     logger.info("Shutdown selesai")
 
 
@@ -200,8 +261,8 @@ class SignalResponse(BaseModel):
 
 class ScanRequest(BaseModel):
     tickers: Optional[List[str]] = None
-    min_score: int = 55
-    min_volume_ratio: float = 1.2
+    min_score: int = 50
+    min_volume_ratio: float = 0.0   # 0.0 = tidak ada filter volume (hanya skor)
     signal_filter: Optional[str] = None  # "BUY", "SELL", None
     send_telegram: bool = False
     skip_prescreen: bool = False  # True = scan seluruh IDX_UNIVERSE langsung
@@ -294,7 +355,7 @@ async def root():
             "errors_recent": "GET /errors/recent",
             "errors_stats": "GET /errors/stats",
         },
-        "universe_size": len(IDX_UNIVERSE),
+        "universe_size": len(get_effective_universe()),
         "prescreen_criteria": {
             "min_price": scanner.pre_screener.criteria.min_price,
             "min_volume_ma5": scanner.pre_screener.criteria.min_volume_ma5,
@@ -316,8 +377,8 @@ async def get_watchlist():
     """Universe IDX yang akan di-pre-screen."""
     c = scanner.pre_screener.criteria
     return {
-        "total_universe": len(IDX_UNIVERSE),
-        "tickers": IDX_UNIVERSE,
+        "total_universe": len(get_effective_universe()),
+        "tickers": get_effective_universe(),
         "prescreen_criteria": {
             "min_price": c.min_price,
             "min_volume_ma5": c.min_volume_ma5,
@@ -348,6 +409,7 @@ async def run_scan(
         signals = await scanner.scan_all_async(
             watchlist=req.tickers,
             min_score=req.min_score,
+            min_volume_ratio=req.min_volume_ratio,
             signal_filter=req.signal_filter,
             skip_prescreen=req.skip_prescreen,
         )
@@ -609,8 +671,8 @@ async def update_prescreen_criteria(
 class FetchRequest(BaseModel):
     tickers: Optional[List[str]] = None       # None = seluruh IDX_UNIVERSE
     period: Optional[str] = None              # "5y", "2y", dll. (harian)
-    intraday_period: Optional[str] = None     # "60d", "30d" (5m)
-    interval: str = "all"                     # "1d", "5m", "all"
+    intraday_period: Optional[str] = None     # "60d", "30d" (5m/15m)
+    interval: str = "all"                     # "1d", "5m", "15m", "all"
     workers: Optional[int] = None
 
 
@@ -639,7 +701,7 @@ async def trigger_data_fetch(
             "progress": current,
         }
 
-    tickers = req.tickers or IDX_UNIVERSE
+    tickers = req.tickers or get_effective_universe()
 
     background_tasks.add_task(
         _background_crawl,
@@ -692,6 +754,13 @@ async def _background_crawl(
                 lambda: crawler.crawl_intraday(
                     tickers, period=intraday_period, interval="5m")
             )
+
+        if interval in ("15m", "all"):
+            await loop.run_in_executor(
+                None,
+                lambda: crawler.crawl_intraday(
+                    tickers, period=intraday_period, interval="15m")
+            )
     except Exception as e:
         logger.error(f"Background crawl error: {e}", exc_info=True)
 
@@ -706,7 +775,7 @@ async def trigger_incremental_update(
     Trigger incremental update (ambil candle terbaru saja).
     Cocok dipanggil manual untuk memperbarui store sebelum scan.
     """
-    ticker_list = tickers or IDX_UNIVERSE
+    ticker_list = tickers or get_effective_universe()
     background_tasks.add_task(_background_update, ticker_list)
     return {
         "status": "started",
@@ -798,12 +867,12 @@ async def clear_errors(_: bool = Depends(verify_api_key)):
 if __name__ == "__main__":
     import sys
 
-    # Mode: api (default) atau bot (polling mode)
+    # Mode: api (default) atau bot (standalone polling tanpa API server)
     mode = sys.argv[1] if len(sys.argv) > 1 else "api"
 
     if mode == "bot":
-        # Jalankan Telegram bot dalam mode polling (tanpa API server)
-        logger.info("Menjalankan dalam mode BOT POLLING...")
+        # Jalankan Telegram bot dalam mode polling standalone (tanpa API server)
+        logger.info("Menjalankan dalam mode BOT POLLING standalone...")
         bot = TelegramBotHandler(
             token=settings.TELEGRAM_BOT_TOKEN,
             chat_ids=settings.TELEGRAM_CHAT_IDS,
@@ -811,12 +880,33 @@ if __name__ == "__main__":
         )
         bot.run_polling()
     else:
-        # Jalankan API server
-        logger.info(f"Menjalankan API server di port {settings.API_PORT}...")
+        # ── Production / Development API server ──
+        # Bot handler + scheduler otomatis dimulai via lifespan (startup hook),
+        # dijaga oleh PID file lock agar hanya 1 proses yang menjalankannya.
+        #
+        # CATATAN PENTING: Bot polling (getUpdates) tidak kompatibel dengan
+        # multi-process. Uvicorn tidak men-set worker ID secara otomatis,
+        # sehingga UVICORN_WORKERS selalu dipaksa ke 1 di sini.
+        # Jika butuh multi-worker di production, gunakan webhook (bukan polling).
+        workers = 1  # paksa single process — polling tidak kompatibel multi-worker
+        if settings.UVICORN_WORKERS > 1:
+            logger.warning(
+                f"⚠️ UVICORN_WORKERS={settings.UVICORN_WORKERS} diabaikan. "
+                "Bot polling (getUpdates) hanya bisa berjalan di 1 proses. "
+                "Gunakan webhook untuk deployment multi-worker."
+            )
+
+        logger.info(
+            f"Menjalankan API server: "
+            f"http://{settings.API_HOST}:{settings.API_PORT} "
+            f"| workers={workers} | debug={settings.DEBUG}"
+        )
         uvicorn.run(
             "main:app",
             host=settings.API_HOST,
             port=settings.API_PORT,
+            workers=1 if settings.DEBUG else workers,  # reload tidak kompatibel dgn workers>1
             reload=settings.DEBUG,
-            log_level="debug" if settings.DEBUG else "info"
+            log_level="debug" if settings.DEBUG else "info",
+            access_log=settings.DEBUG,  # matikan access log di production untuk performa
         )

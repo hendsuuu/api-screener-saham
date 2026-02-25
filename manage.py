@@ -402,8 +402,8 @@ def cmd_get_data(args):
         tickers = [t.strip().upper()
                    for t in args.tickers.split(",") if t.strip()]
     else:
-        from data.stock_list import IDX_UNIVERSE
-        tickers = IDX_UNIVERSE
+        from data.stock_list import get_effective_universe
+        tickers = get_effective_universe()
 
     workers = getattr(args, "workers", None) or settings.CRAWL_WORKERS
     period_daily = getattr(
@@ -423,25 +423,20 @@ def cmd_get_data(args):
     # ── Mode: incremental update saja ──────────────────────────────────────
     if update_only:
         print(
-            f"\n  [*] Mode: incremental update (5m) untuk {len(tickers)} saham ...")
+            f"\n  [*] Mode: incremental update (5m + 15m) untuk {len(tickers)} saham ...")
         t0 = time.time()
 
-        try:
-            import tqdm
-            _has_tqdm = True
-        except ImportError:
-            _has_tqdm = False
-
         result = crawler.update_latest(tickers, interval="5m", workers=workers)
+        result_15 = crawler.update_latest(tickers, interval="15m", workers=workers)
         elapsed = time.time() - t0
 
         print(f"\n  [✓] Update selesai ({elapsed:.0f}s)")
-        print(f"  [i] Diperbarui : {result['updated']}")
-        print(f"  [i] Di-skip    : {result['skipped']} (data sudah fresh)")
-        print(f"  [i] Gagal      : {result['failed']}")
-        print(f"  [i] Baris baru : +{result['new_rows']}")
+        print(f"  [i] 5m  — Diperbarui: {result['updated']} | Skip: {result['skipped']} | Gagal: {result['failed']} | +{result['new_rows']} baris")
+        print(f"  [i] 15m — Diperbarui: {result_15['updated']} | Skip: {result_15['skipped']} | Gagal: {result_15['failed']} | +{result_15['new_rows']} baris")
         if result.get('errors'):
-            print(f"  [!] Errors: {', '.join(result['errors'][:5])}")
+            print(f"  [!] Errors 5m : {', '.join(result['errors'][:5])}")
+        if result_15.get('errors'):
+            print(f"  [!] Errors 15m: {', '.join(result_15['errors'][:5])}")
         return
 
     # ── Mode: crawl historis ────────────────────────────────────────────────
@@ -536,7 +531,46 @@ def cmd_get_data(args):
             f"  [i] OK: {result_intra['success']} | Gagal: {result_intra['failed']}")
         if result_intra.get('errors'):
             print(f"  [!] Contoh error: {result_intra['errors'][0]}")
+    if interval in ("15m", "all"):
+        print(f"\n  \u2554{'═'*43}\u2557")
+        print(f"  \u2551  CRAWL INTRADAY 15 MENIT ({period_intraday})       \u2551")
+        print(f"  \u2560{'═'*43}\u2563")
+        print(f"  \u2551  Saham   : {len(tickers):>6}                   \u2551")
+        print(f"  \u2551  Period  : {period_intraday:<30} \u2551")
+        print(f"  \u2551  Workers : {workers:<30} \u2551")
+        print(f"  \u255a{'═'*43}\u255d")
+        print()
 
+        def _cb_intra15(done, total, ticker):
+            if done % 20 == 0:
+                pct = done / total * 100
+                print(f"  [{done}/{total}] {pct:.0f}% \u2014 {ticker}")
+
+        t0 = time.time()
+        if _has_tqdm:
+            pbar15 = _tqdm(total=len(tickers), unit="saham", desc="Intraday 15m")
+
+            def _cb_intra15_tqdm(done, total, ticker):
+                pbar15.update(1)
+                pbar15.set_postfix({"last": ticker[:8]})
+
+            result_intra15 = crawler.crawl_intraday(
+                tickers, period=period_intraday, interval="15m",
+                workers=workers, progress_cb=_cb_intra15_tqdm
+            )
+            pbar15.close()
+        else:
+            result_intra15 = crawler.crawl_intraday(
+                tickers, period=period_intraday, interval="15m",
+                workers=workers, progress_cb=_cb_intra15
+            )
+
+        elapsed = time.time() - t0
+        print(f"\n  [\u2713] Intraday 15m selesai ({elapsed:.0f}s)")
+        print(
+            f"  [i] OK: {result_intra15['success']} | Gagal: {result_intra15['failed']}")
+        if result_intra15.get('errors'):
+            print(f"  [!] Contoh error: {result_intra15['errors'][0]}")
     # Show final store stats
     try:
         stats = get_store().stats()
@@ -654,8 +688,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Periode historis untuk data harian: 1y, 2y, 5y (default dari .env)"
     )
     p_get.add_argument(
-        "--interval", default="all", choices=["1d", "5m", "all"],
-        help="Interval yang di-crawl: '1d' (harian), '5m' (intraday), 'all' (default)"
+        "--interval", default="all", choices=["1d", "5m", "15m", "all"],
+        help="Interval yang di-crawl: '1d' (harian), '5m' (intraday), '15m' (intraday 15m), 'all' (default)"
     )
     p_get.add_argument(
         "--tickers", default=None,

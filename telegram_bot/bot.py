@@ -4,6 +4,7 @@ Menggunakan python-telegram-bot v20+
 """
 
 import asyncio
+import html
 import logging
 import os
 from pathlib import Path
@@ -21,7 +22,11 @@ from config import settings
 from screener.signal_generator import ScalpSignal
 from screener.scanner import StockScanner
 from data.fetcher import StockDataFetcher
-from data.stock_list import get_yahoo_symbol, IDX_UNIVERSE
+from data.stock_list import (
+    get_yahoo_symbol, IDX_UNIVERSE,
+    load_custom_stocks, add_custom_stock, remove_custom_stock,
+    get_sector_map, get_effective_universe,
+)
 from telegram_bot.formatter import TelegramFormatter
 
 logger = logging.getLogger(__name__)
@@ -178,7 +183,14 @@ class TelegramBotHandler:
 
     def build_app(self) -> Application:
         """Buat dan konfigurasi aplikasi bot."""
-        self.app = Application.builder().token(self.token).build()
+        # concurrent_updates=True: setiap command handler berjalan dalam
+        # coroutine terpisah sehingga banyak user bisa dilayani bersamaan.
+        self.app = (
+            Application.builder()
+            .token(self.token)
+            .concurrent_updates(True)
+            .build()
+        )
 
         # Daftarkan command handlers
         self.app.add_handler(CommandHandler("start", self.cmd_start))
@@ -191,7 +203,11 @@ class TelegramBotHandler:
         self.app.add_handler(CommandHandler("waspada", self.cmd_waspada))
         self.app.add_handler(CommandHandler("sell", self.cmd_waspada))  # alias lama
         self.app.add_handler(CommandHandler("market", self.cmd_market))
+        self.app.add_handler(CommandHandler("stocklist", self.cmd_stocklist))
+        self.app.add_handler(CommandHandler("cek", self.cmd_cek))
         # Admin commands (hanya ADMIN_CHAT_IDS)
+        self.app.add_handler(CommandHandler("addstock", self.cmd_addstock))
+        self.app.add_handler(CommandHandler("removestock", self.cmd_removestock))
         self.app.add_handler(CommandHandler("admin", self.cmd_admin))
 
         # Handler pesan tidak dikenal
@@ -239,8 +255,10 @@ Ketik /scan untuk mulai scan sekarang!
 
     async def cmd_market(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Status pasar dan ringkasan."""
-        market = self.fetcher.get_market_status()
-        summary = self.scanner.get_market_summary()
+        market, summary = await asyncio.gather(
+            asyncio.to_thread(self.fetcher.get_market_status),
+            asyncio.to_thread(self.scanner.get_market_summary),
+        )
 
         status_emoji = "🟢" if market.get("is_open") else "🔴"
         msg = f"""
@@ -276,7 +294,7 @@ Ketik /scan untuk mulai scan sekarang!
             signals = await self.scanner.scan_all_async(
                 min_score=settings.MIN_SIGNAL_SCORE
             )
-            market = self.fetcher.get_market_status()
+            market = await asyncio.to_thread(self.fetcher.get_market_status)
 
             if not signals:
                 await update.message.reply_text(
@@ -318,7 +336,7 @@ Ketik /scan untuk mulai scan sekarang!
 
     async def cmd_top(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tampilkan top sinyal dari scan terakhir (termasuk dari cache disk)."""
-        top = self.scanner.get_top_signals(5)
+        top = await asyncio.to_thread(self.scanner.get_top_signals, 5)
 
         if not top:
             await update.message.reply_text(
@@ -355,7 +373,7 @@ Ketik /scan untuk mulai scan sekarang!
         )
 
         try:
-            signal = self.scanner.scan_single_stock(ticker_raw)
+            signal = await asyncio.to_thread(self.scanner.scan_single_stock, ticker_raw)
 
             if signal:
                 detail = self.formatter.format_signal(signal)
@@ -400,10 +418,8 @@ Ketik /scan untuk mulai scan sekarang!
         )
 
         try:
-            loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(
-                None,
-                lambda: self.scanner.analyze_stock_info(ticker_raw)
+            info = await asyncio.to_thread(
+                self.scanner.analyze_stock_info, ticker_raw
             )
             msg = self.formatter.format_info(info)
             await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
@@ -417,7 +433,9 @@ Ketik /scan untuk mulai scan sekarang!
 
     async def cmd_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tampilkan sinyal BUY saja (dari memory atau cache disk hari ini)."""
-        buy_signals = self.scanner._get_results_with_cache(signal_type="BUY")
+        buy_signals = await asyncio.to_thread(
+            self.scanner._get_results_with_cache, "BUY"
+        )
 
         if not buy_signals:
             await update.message.reply_text(
@@ -454,7 +472,9 @@ Ketik /scan untuk mulai scan sekarang!
 
     async def cmd_waspada(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tampilkan sinyal WASPADA (kondisi bearish, dari memory atau cache disk)."""
-        warn_signals = self.scanner._get_results_with_cache(signal_type="WASPADA")
+        warn_signals = await asyncio.to_thread(
+            self.scanner._get_results_with_cache, "WASPADA"
+        )
 
         if not warn_signals:
             await update.message.reply_text(
@@ -490,6 +510,132 @@ Ketik /scan untuk mulai scan sekarang!
             )
 
         msg += "\n💡 Gunakan /signal [KODE] untuk analisis lengkap"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    # ── STOCK LIST COMMANDS ───────────────────────────────────────────────────
+
+    async def cmd_stocklist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        /stocklist — Tampilkan seluruh daftar saham yang di-screen.
+        Tersedia untuk semua user.
+        """
+        try:
+            sector_map = await asyncio.to_thread(get_sector_map)
+            custom_stocks = await asyncio.to_thread(load_custom_stocks)
+            text = self.formatter.format_stocklist(sector_map, custom_stocks)
+        except Exception as e:
+            text = f"❌ Gagal memuat stock list: {html.escape(str(e)[:200])}"
+
+        # Telegram batas 4096 karakter — potong jika perlu
+        if len(text) > 4096:
+            text = text[:4090] + "\n…"
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+    async def cmd_cek(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        /cek KODE [KODE2 KODE3 ...]
+        Cek apakah satu atau banyak ticker ada dalam universe (built-in / custom).
+        Tersedia untuk semua user.
+        """
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Format: /cek KODE [KODE2 KODE3 ...]"
+                "\nContoh: /cek BBCA TLKM ACES",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        tickers = [t.upper().strip().replace(".JK", "") for t in context.args[:20]]
+
+        custom_tickers_map = {
+            s["ticker"]: s for s in await asyncio.to_thread(load_custom_stocks)
+        }
+        universe_set = set(IDX_UNIVERSE)
+
+        results = []
+        for t in tickers:
+            if t in universe_set:
+                results.append((t, "builtin"))
+            elif t in custom_tickers_map:
+                results.append((t, "custom", custom_tickers_map[t]))
+            else:
+                results.append((t, "notfound"))
+
+        text = self.formatter.format_cek(results)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+    async def cmd_addstock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        /addstock TICKER [Nama Perusahaan]
+        Tambahkan saham baru ke custom list. Hanya admin.
+        """
+        if not await _require_admin(update):
+            return
+
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Format: /addstock KODE [Nama Perusahaan]\n"
+                "Contoh: /addstock ACES Ace Hardware Indonesia",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        ticker = context.args[0].upper().strip().replace(".JK", "")
+        name = " ".join(context.args[1:]) if len(context.args) > 1 else ""
+        added_by = str(update.effective_user.id)
+
+        ok, msg = await asyncio.to_thread(
+            add_custom_stock, ticker, name, added_by
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+        # Jika berhasil ditambahkan, trigger incremental fetch di background
+        if ok:
+            asyncio.create_task(self._fetch_new_stock(ticker, update))
+
+    async def _fetch_new_stock(self, ticker: str, update: Update):
+        """Background: crawl data historis untuk saham yang baru ditambahkan."""
+        try:
+            from data.crawler import get_crawler
+            from config import settings
+            crawler = await asyncio.to_thread(get_crawler)
+            yahoo_ticker = get_yahoo_symbol(ticker)
+            result = await asyncio.to_thread(
+                crawler.crawl_intraday,
+                [ticker],
+                settings.CRAWL_INTRADAY_PERIOD,
+                "5m",
+            )
+            updated = result.get("updated", 0) if isinstance(result, dict) else 0
+            await update.message.reply_text(
+                f"📥 Fetch data <b>{ticker}</b> selesai. "
+                f"Candle 5m tersimpan: <b>{updated}</b>.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"⚠️ Fetch data <b>{html.escape(ticker)}</b> gagal: "
+                f"{html.escape(str(e)[:200])}",
+                parse_mode=ParseMode.HTML,
+            )
+
+    async def cmd_removestock(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        /removestock TICKER
+        Hapus saham dari custom list. Hanya admin.
+        """
+        if not await _require_admin(update):
+            return
+
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Format: /removestock KODE\nContoh: /removestock ACES",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        ticker = context.args[0].upper().strip().replace(".JK", "")
+        ok, msg = await asyncio.to_thread(remove_custom_stock, ticker)
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     # ── ADMIN COMMANDS ────────────────────────────────────────────────────────
@@ -529,8 +675,10 @@ Ketik /scan untuk mulai scan sekarang!
 
         # ── /admin status ────────────────────────────────────────────────────
         if subcmd == "status":
-            market = self.fetcher.get_market_status()
-            summary = self.scanner.get_market_summary()
+            market, summary = await asyncio.gather(
+                asyncio.to_thread(self.fetcher.get_market_status),
+                asyncio.to_thread(self.scanner.get_market_summary),
+            )
 
             # Store stats
             try:
@@ -577,7 +725,7 @@ Ketik /scan untuk mulai scan sekarang!
             )
             try:
                 signals = await self.scanner.scan_all_async(min_score=50)
-                market = self.fetcher.get_market_status()
+                market = await asyncio.to_thread(self.fetcher.get_market_status)
                 if not signals:
                     await update.message.reply_text(
                         "ℹ️ Tidak ada sinyal saat ini.", parse_mode=ParseMode.HTML
@@ -663,9 +811,7 @@ Ketik /scan untuk mulai scan sekarang!
             try:
                 from data.dynamic_screener import DynamicPreScreener
                 screener = DynamicPreScreener()
-                candidates = await asyncio.get_event_loop().run_in_executor(
-                    None, screener.run
-                )
+                candidates = await asyncio.to_thread(screener.run)
                 total = len(candidates) if candidates else 0
                 msg = (
                     f"✅ <b>Pre-screener selesai</b>\n"

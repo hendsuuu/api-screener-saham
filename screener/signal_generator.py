@@ -269,11 +269,75 @@ class SignalGenerator:
         else:
             return "WEAK"
 
+    def _get_15m_confirmation(self, df_15m: pd.DataFrame, signal_type: str) -> Tuple[int, List[str]]:
+        """
+        Hitung bonus/penalti skor dan alasan dari konfirmasi timeframe 15 menit.
+
+        Returns:
+            (delta_score, reasons)
+        """
+        delta = 0
+        reasons: List[str] = []
+        try:
+            trend_15m = self._get_trend(df_15m)
+            macd_line, signal_line, histogram = self.ind.macd(df_15m["Close"], 12, 26, 9)
+            macd_15m_bull = histogram.iloc[-1] > 0
+
+            if signal_type == "BUY":
+                if trend_15m == "UPTREND":
+                    delta += 10
+                    reasons.append("✅ Konfirmasi 15m: uptrend kuat (+10)")
+                elif trend_15m == "UPTREND_WEAK":
+                    delta += 5
+                    reasons.append("✅ Konfirmasi 15m: uptrend lemah (+5)")
+                elif trend_15m == "DOWNTREND":
+                    delta -= 10
+                    reasons.append("🔴 Kontratren 15m: downtrend kuat (-10)")
+                elif trend_15m == "DOWNTREND_WEAK":
+                    delta -= 5
+                    reasons.append("⚠️ Kontratren 15m: downtrend lemah (-5)")
+                else:
+                    reasons.append("↔️ Konfirmasi 15m: sideways (netral)")
+
+                if macd_15m_bull:
+                    delta += 5
+                    reasons.append("✅ MACD 15m positif (+5)")
+                else:
+                    delta -= 5
+                    reasons.append("⚠️ MACD 15m negatif (-5)")
+            else:  # SELL
+                if trend_15m == "DOWNTREND":
+                    delta += 10
+                    reasons.append("✅ Konfirmasi 15m: downtrend kuat (+10)")
+                elif trend_15m == "DOWNTREND_WEAK":
+                    delta += 5
+                    reasons.append("✅ Konfirmasi 15m: downtrend lemah (+5)")
+                elif trend_15m == "UPTREND":
+                    delta -= 10
+                    reasons.append("🔴 Kontratren 15m: uptrend kuat (-10)")
+                elif trend_15m == "UPTREND_WEAK":
+                    delta -= 5
+                    reasons.append("⚠️ Kontratren 15m: uptrend lemah (-5)")
+                else:
+                    reasons.append("↔️ Konfirmasi 15m: sideways (netral)")
+
+                if not macd_15m_bull:
+                    delta += 5
+                    reasons.append("✅ MACD 15m negatif — konfirmasi bearish (+5)")
+                else:
+                    delta -= 5
+                    reasons.append("⚠️ MACD 15m positif — kontratren (-5)")
+        except Exception:
+            pass  # 15m data incomplete, skip confirmation
+
+        return delta, reasons
+
     def generate_buy_signal(
         self,
         ticker: str,
         df_5m: pd.DataFrame,
-        company_name: str = ""
+        company_name: str = "",
+        df_15m: Optional[pd.DataFrame] = None,
     ) -> Optional[ScalpSignal]:
         """
         Generate sinyal BUY untuk scalping.
@@ -317,6 +381,12 @@ class SignalGenerator:
         score, reasons = self._score_signal(
             rsi_val, macd_bull, vol_ratio, trend, candle_pattern, adx, "BUY"
         )
+
+        # ── Konfirmasi 15m ──────────────────────────────────────
+        if df_15m is not None and len(df_15m) >= 20:
+            delta_15m, reasons_15m = self._get_15m_confirmation(df_15m, "BUY")
+            score = max(0, min(100, score + delta_15m))
+            reasons.extend(reasons_15m)
 
         if score < 45:
             return None  # Sinyal terlalu lemah
@@ -418,7 +488,8 @@ class SignalGenerator:
         self,
         ticker: str,
         df_5m: pd.DataFrame,
-        company_name: str = ""
+        company_name: str = "",
+        df_15m: Optional[pd.DataFrame] = None,
     ) -> Optional[ScalpSignal]:
         """
         Deteksi kondisi BEARISH dan kembalikan sinyal WASPADA.
@@ -460,6 +531,12 @@ class SignalGenerator:
         score, reasons = self._score_signal(
             rsi_val, not macd_bear, vol_ratio, trend, candle_pattern, adx, "SELL"
         )
+
+        # ── Konfirmasi 15m ──────────────────────────────────────
+        if df_15m is not None and len(df_15m) >= 20:
+            delta_15m, reasons_15m = self._get_15m_confirmation(df_15m, "SELL")
+            score = max(0, min(100, score + delta_15m))
+            reasons.extend(reasons_15m)
 
         if score < 45:
             return None

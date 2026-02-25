@@ -43,7 +43,7 @@ _BANK = [
     "AGRO", "ARTO", "BABP", "BBYB", "BCIC", "BGTG", "BINA", "BMAS",
     "BPFI", "BSIM", "DNAR", "INPC", "MAYA", "MCOR", "NAGA", "NOBU",
     "PNBS", "SDRA", "ADMF", "BFIN", "BPII", "CFIN", "MFIN", "VRNA",
-    "WOMF", "BCAP", "LPPS", "MPMX", "SMMA",
+    "WOMF", "BCAP", "LPPS", "MPMX", "SMMA","SUPA"
 ]
 
 # Energi, Batubara & Migas
@@ -59,7 +59,7 @@ _ENERGI = [
 _TAMBANG = [
     "ANTM", "INCO", "MDKA", "MBMA", "PSAB", "SMCB", "BRMS", "CITA",
     "DKFT", "IFSH", "IPPE", "NUSA", "POLU", "TINS", "ZINC", "CKRA",
-    "DSSA", "HRTA", "LMSH", "NIKL", "PURE", "SQMI",
+    "DSSA", "HRTA", "LMSH", "NIKL", "PURE", "SQMI","PTRO"
 ]
 
 # Telekomunikasi & Teknologi
@@ -257,3 +257,143 @@ def get_yahoo_symbol(ticker: str) -> str:
 def get_all_yahoo_symbols(tickers: list) -> list:
     """Konversi list ticker ke format Yahoo Finance."""
     return [get_yahoo_symbol(t) for t in tickers]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CUSTOM STOCK LIST — penambahan saham oleh admin via Telegram
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+
+_logger = logging.getLogger(__name__)
+_CUSTOM_STOCKS_PATH = Path(__file__).parent / "custom_stocks.json"
+
+
+def _load_custom_json() -> dict:
+    """Baca file custom_stocks.json; kembalikan dict kosong jika error."""
+    try:
+        if _CUSTOM_STOCKS_PATH.exists():
+            with open(_CUSTOM_STOCKS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        _logger.warning(f"Gagal baca custom_stocks.json: {e}")
+    return {"stocks": []}
+
+
+def _save_custom_json(data: dict) -> bool:
+    """Tulis dict ke custom_stocks.json. Return True jika sukses."""
+    try:
+        with open(_CUSTOM_STOCKS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        _logger.error(f"Gagal simpan custom_stocks.json: {e}")
+        return False
+
+
+def load_custom_stocks() -> list:
+    """
+    Kembalikan list dict custom stock yang sudah ditambahkan.
+    Setiap item: {"ticker": str, "name": str, "added_by": str, "added_at": str}
+    """
+    return _load_custom_json().get("stocks", [])
+
+
+def add_custom_stock(ticker: str, name: str = "", added_by: str = "") -> tuple:
+    """
+    Tambahkan saham ke custom list.
+
+    Args:
+        ticker   : Kode saham BEI (tanpa .JK), huruf kapital.
+        name     : Nama perusahaan (opsional).
+        added_by : ID user Telegram yang menambahkan.
+
+    Returns:
+        (True, "pesan") jika berhasil ditambahkan.
+        (False, "pesan") jika sudah ada atau error.
+    """
+    ticker = ticker.upper().strip().replace(".JK", "")
+    if not ticker:
+        return False, "Kode saham tidak valid."
+
+    data = _load_custom_json()
+    existing = [s["ticker"] for s in data.get("stocks", [])]
+
+    if ticker in IDX_UNIVERSE:
+        return False, f"<b>{ticker}</b> sudah ada di IDX Universe (built-in)."
+
+    if ticker in existing:
+        return False, f"<b>{ticker}</b> sudah ada di custom list."
+
+    entry = {
+        "ticker": ticker,
+        "name": name.strip() if name else "",
+        "added_by": str(added_by),
+        "added_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    data.setdefault("stocks", []).append(entry)
+
+    if _save_custom_json(data):
+        # Update alias di COMPANY_NAMES jika ada nama
+        if name:
+            COMPANY_NAMES[ticker] = name.strip()
+        return True, f"✅ <b>{ticker}</b> berhasil ditambahkan ke custom list."
+    return False, "❌ Gagal menyimpan ke file."
+
+
+def remove_custom_stock(ticker: str) -> tuple:
+    """
+    Hapus saham dari custom list.
+
+    Returns:
+        (True, "pesan") jika berhasil dihapus.
+        (False, "pesan") jika tidak ditemukan.
+    """
+    ticker = ticker.upper().strip().replace(".JK", "")
+    data = _load_custom_json()
+    stocks = data.get("stocks", [])
+    new_stocks = [s for s in stocks if s["ticker"] != ticker]
+
+    if len(new_stocks) == len(stocks):
+        return False, f"<b>{ticker}</b> tidak ditemukan di custom list."
+
+    data["stocks"] = new_stocks
+    if _save_custom_json(data):
+        COMPANY_NAMES.pop(ticker, None)
+        return True, f"✅ <b>{ticker}</b> berhasil dihapus dari custom list."
+    return False, "❌ Gagal menyimpan ke file."
+
+
+def get_effective_universe() -> list:
+    """
+    Kembalikan IDX_UNIVERSE + custom stocks (deduplikasi, terurut).
+    Ini adalah pool lengkap yang digunakan oleh scanner dan pre-screener.
+    """
+    custom_tickers = [s["ticker"] for s in load_custom_stocks()]
+    combined = list(dict.fromkeys(IDX_UNIVERSE + custom_tickers))
+    return combined
+
+
+def get_sector_map() -> dict:
+    """
+    Kembalikan mapping {sector_name: [tickers]} untuk tampilan /stocklist.
+    """
+    return {
+        "🏦 Perbankan & Keuangan": _BANK,
+        "⚡ Energi & Batubara": _ENERGI,
+        "⛏ Tambang & Mineral": _TAMBANG,
+        "📡 Telko & Teknologi": _TELKO_TECH,
+        "🛒 Consumer & F&B": _CONSUMER_FNB,
+        "🏪 Ritel": _RITEL,
+        "🏠 Properti": _PROPERTI,
+        "🏗 Infrastruktur & Semen": _INFRASTRUKTUR,
+        "🚗 Otomotif": _OTOMOTIF,
+        "💊 Kesehatan & Farmasi": _KESEHATAN,
+        "🏭 Industri & Kimia": _INDUSTRI,
+        "🌾 Agribisnis": _AGRI,
+        "🎬 Media & Hotel": _MEDIA_HOTEL,
+        "🚢 Logistik & Trans.": _LOGISTIK,
+    }

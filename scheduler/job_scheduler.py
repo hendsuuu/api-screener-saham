@@ -146,9 +146,10 @@ class ScanScheduler:
 
         try:
             from data.crawler import get_crawler
-            from data.stock_list import IDX_UNIVERSE
+            from data.stock_list import get_effective_universe
 
             crawler = get_crawler()
+            universe = get_effective_universe()
             loop = asyncio.get_event_loop()
 
             # Update semua interval yang disimpan di store
@@ -157,7 +158,7 @@ class ScanScheduler:
                 result = await loop.run_in_executor(
                     None,
                     lambda iv=interval: crawler.update_latest(
-                        IDX_UNIVERSE, interval=iv
+                        universe, interval=iv
                     )
                 )
                 logger.info(

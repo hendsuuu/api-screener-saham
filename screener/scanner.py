@@ -32,6 +32,7 @@ from data.fetcher import StockDataFetcher
 from data.stock_list import (
     IDX_UNIVERSE, SCREENER_WATCHLIST,
     COMPANY_NAMES, get_yahoo_symbol,
+    get_effective_universe,
 )
 from data.dynamic_screener import DynamicPreScreener, ScreenerCriteria
 from screener.signal_generator import SignalGenerator, ScalpSignal
@@ -56,7 +57,7 @@ class StockScanner:
         self.max_workers = max_workers
         self.pre_screener = DynamicPreScreener(
             criteria=criteria,
-            universe=IDX_UNIVERSE,
+            universe=get_effective_universe(),
         )
         self.last_scan_results: List[ScalpSignal] = []
         self.last_scan_time: Optional[str] = None
@@ -115,10 +116,21 @@ class StockScanner:
             )
             source = "live"
 
+        # ── Load 15m dari store untuk konfirmasi timeframe ───────
+        df_15m = None
+        try:
+            from data.store import get_store as _get_store
+            _store = _get_store()
+            _df15 = _store.load(ticker_raw, "15m", days=5)
+            if _df15 is not None and len(_df15) >= 20:
+                df_15m = _df15
+        except Exception as _e:
+            logger.debug(f"{ticker_raw}: gagal baca store 15m: {_e}")
+
         if df_5m is None or len(df_5m) < 50:
-            logger.debug(
-                f"Data tidak cukup untuk {ticker}: "
-                f"{len(df_5m) if df_5m is not None else 0} candle [{source}]"
+            logger.info(
+                f"[SKIP] {ticker_raw}: data 5m tidak cukup "
+                f"({len(df_5m) if df_5m is not None else 0} candle, min 50) [{source}]"
             )
             return None
 
@@ -127,19 +139,48 @@ class StockScanner:
         try:
             # Generate sinyal BUY
             buy_signal = self.generator.generate_buy_signal(
-                ticker, df_5m, company_name)
+                ticker, df_5m, company_name, df_15m=df_15m)
 
             # Generate sinyal WASPADA/SELL
             sell_signal = self.generator.generate_sell_signal(
-                ticker, df_5m, company_name)
+                ticker, df_5m, company_name, df_15m=df_15m)
 
             # Pilih sinyal dengan skor lebih tinggi
             if buy_signal and sell_signal:
-                return buy_signal if buy_signal.signal_score >= sell_signal.signal_score else sell_signal
+                result = buy_signal if buy_signal.signal_score >= sell_signal.signal_score else sell_signal
+                logger.debug(
+                    f"[{result.signal_type}] {ticker_raw}: skor={result.signal_score} "
+                    f"vol={result.volume_ratio:.2f}x trend={result.trend}"
+                )
+                return result
             elif buy_signal:
+                logger.debug(
+                    f"[BUY] {ticker_raw}: skor={buy_signal.signal_score} "
+                    f"vol={buy_signal.volume_ratio:.2f}x trend={buy_signal.trend}"
+                )
                 return buy_signal
             elif sell_signal:
+                logger.debug(
+                    f"[WASPADA] {ticker_raw}: skor={sell_signal.signal_score} "
+                    f"vol={sell_signal.volume_ratio:.2f}x trend={sell_signal.trend}"
+                )
                 return sell_signal
+
+            # Tidak ada sinyal — hitung indikator dasar untuk log diagnosis
+            try:
+                close = df_5m["Close"]
+                rsi_val = float(self.generator.ind.rsi(close, 9).iloc[-1])
+                _, _, hist = self.generator.ind.macd(close, 12, 26, 9)
+                macd_hist_val = float(hist.iloc[-1])
+                trend = self.generator._get_trend(df_5m)
+                vol_ratio = float(self.generator.ind.volume_ratio(df_5m, 20).iloc[-1])
+                logger.info(
+                    f"[NO SIGNAL] {ticker_raw}: RSI={rsi_val:.1f} "
+                    f"MACD_hist={macd_hist_val:.4f} trend={trend} "
+                    f"vol={vol_ratio:.2f}x — tidak memenuhi threshold"
+                )
+            except Exception:
+                logger.info(f"[NO SIGNAL] {ticker_raw}: tidak ada sinyal (skor < 45)")
 
             return None
 
@@ -156,7 +197,7 @@ class StockScanner:
         self,
         watchlist: Optional[List[str]] = None,
         min_score: int = 55,
-        min_volume_ratio: float = 1.2,
+        min_volume_ratio: float = 0.0,
         signal_filter: Optional[str] = None,  # "BUY", "SELL", atau None
         skip_prescreen: bool = False,
     ) -> List[ScalpSignal]:
@@ -194,15 +235,18 @@ class StockScanner:
                 f"Scan manual: {len(candidates)} saham (pre-screen dilewati)"
             )
         elif skip_prescreen:
-            candidates = IDX_UNIVERSE
+            universe = get_effective_universe()
+            candidates = universe
             logger.info(
                 f"Scan tanpa pre-screen: {len(candidates)} saham (debug mode)"
             )
         else:
-            # DEFAULT: pre-screen IDX_UNIVERSE dulu
+            # DEFAULT: pre-screen effective universe dulu
+            universe = get_effective_universe()
             logger.info(
-                f"Tahap 1 — Pre-screen {len(IDX_UNIVERSE)} saham IDX..."
+                f"Tahap 1 — Pre-screen {len(universe)} saham IDX + custom..."
             )
+            self.pre_screener.universe = universe
             candidates = self.pre_screener.run(verbose=True)
             self.last_prescreen_summary = self.pre_screener.summary()
 
@@ -216,7 +260,7 @@ class StockScanner:
 
             logger.info(
                 f"Tahap 1 selesai: {len(candidates)} kandidat lolos pre-screen "
-                f"(dari {len(IDX_UNIVERSE)} saham)"
+                f"(dari {len(universe)} saham)"
             )
 
         # ── Tahap 2: analisis teknikal paralel ───────────────
@@ -224,6 +268,7 @@ class StockScanner:
             f"Tahap 2 — Analisis teknikal {len(candidates)} kandidat...")
 
         signals: List[ScalpSignal] = []
+        no_signal_count = 0
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_ticker = {
                 executor.submit(self.scan_single_stock, ticker): ticker
@@ -235,23 +280,60 @@ class StockScanner:
                     signal = future.result(timeout=30)
                     if signal is not None:
                         signals.append(signal)
+                    else:
+                        no_signal_count += 1
                 except Exception as e:
                     logger.error(f"Error future {ticker}: {e}")
+                    no_signal_count += 1
+
+        # ── Log semua sinyal mentah sebelum filter ────────────
+        logger.info(
+            f"Tahap 2 selesai: {len(signals)} sinyal raw dari {len(candidates)} kandidat "
+            f"(no-signal/error: {no_signal_count})"
+        )
+        if signals:
+            for sig in sorted(signals, key=lambda s: s.signal_score, reverse=True):
+                logger.info(
+                    f"  RAW {sig.signal_type:7s} {sig.ticker_clean:6s} | "
+                    f"skor={sig.signal_score:3d} vol={sig.volume_ratio:.2f}x "
+                    f"trend={sig.trend}"
+                )
 
         # ── Filter & urutkan ─────────────────────────────────
-        filtered = [
-            sig for sig in signals
-            if sig.signal_score >= min_score
-            and sig.volume_ratio >= min_volume_ratio
-            and (signal_filter is None or sig.signal_type == signal_filter)
+        after_score = [s for s in signals if s.signal_score >= min_score]
+        after_vol   = [s for s in after_score if s.volume_ratio >= min_volume_ratio]
+        filtered    = [
+            s for s in after_vol
+            if signal_filter is None or s.signal_type == signal_filter
         ]
         filtered.sort(key=lambda x: x.signal_score, reverse=True)
+
+        # Log saham yang gugur di tiap filter
+        score_rejected = [s for s in signals if s.signal_score < min_score]
+        vol_rejected   = [s for s in after_score if s.volume_ratio < min_volume_ratio]
+        if score_rejected:
+            logger.info(
+                f"  ❌ Gugur filter skor (<{min_score}): "
+                + ", ".join(
+                    f"{s.ticker_clean}({s.signal_score})"
+                    for s in sorted(score_rejected, key=lambda s: s.signal_score, reverse=True)
+                )
+            )
+        if vol_rejected:
+            logger.info(
+                f"  ❌ Gugur filter volume (<{min_volume_ratio:.1f}x): "
+                + ", ".join(
+                    f"{s.ticker_clean}({s.volume_ratio:.2f}x)"
+                    for s in vol_rejected
+                )
+            )
 
         elapsed = time.time() - start_time
         logger.info(
             f"Scan selesai {elapsed:.1f}s | "
             f"Kandidat: {len(candidates)} | "
-            f"Sinyal ditemukan: {len(filtered)}"
+            f"Sinyal raw: {len(signals)} | "
+            f"Lolos semua filter: {len(filtered)}"
         )
 
         self.last_scan_results = filtered
@@ -322,6 +404,7 @@ class StockScanner:
             "risk_detail": [],
             "confidence": 0,
             "confidence_reasons": [],
+            "trend_15m": "N/A",
             "signal_obj": None,
         }
 
@@ -350,6 +433,16 @@ class StockScanner:
             try:
                 from data.store import get_store
                 df_1d = get_store().load(ticker_raw, "1d", days=90)
+            except Exception:
+                pass
+
+            # ── Load data 15m untuk konfirmasi timeframe ────────
+            df_15m = None
+            try:
+                from data.store import get_store as _gs15
+                _df15 = _gs15().load(ticker_raw, "15m", days=5)
+                if _df15 is not None and len(_df15) >= 20:
+                    df_15m = _df15
             except Exception:
                 pass
 
@@ -575,7 +668,33 @@ class StockScanner:
                 conf_score -= 8
                 conf_reasons.append(
                     f"⚠️ ADX={adx:.0f} — pasar sideways, tren lemah")
-
+            # 15m timeframe confirmation
+            if df_15m is not None:
+                try:
+                    from screener.signal_generator import SignalGenerator as _SG
+                    _gen = _SG()
+                    trend_15m = _gen._get_trend(df_15m)
+                    _ema12_15 = df_15m["Close"].ewm(span=12, adjust=False).mean()
+                    _ema26_15 = df_15m["Close"].ewm(span=26, adjust=False).mean()
+                    _macd15_bull = (_ema12_15.iloc[-1] - _ema26_15.iloc[-1]) > 0
+                    trend_15m_label = trend_15m.replace("_", " ").title()
+                    if trend_15m in ("UPTREND", "UPTREND_WEAK") and trend in ("BULLISH", "UPTREND_WEAK"):
+                        conf_score += 10
+                        conf_reasons.append(f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
+                    elif trend_15m in ("DOWNTREND", "DOWNTREND_WEAK") and trend in ("BEARISH", "DOWNTREND_WEAK"):
+                        conf_score += 10
+                        conf_reasons.append(f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
+                    elif trend_15m in ("UPTREND", "UPTREND_WEAK") and trend in ("BEARISH", "DOWNTREND_WEAK"):
+                        conf_score -= 8
+                        conf_reasons.append(f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bearish (-8)")
+                    elif trend_15m in ("DOWNTREND", "DOWNTREND_WEAK") and trend in ("BULLISH", "UPTREND_WEAK"):
+                        conf_score -= 8
+                        conf_reasons.append(f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bullish (-8)")
+                    else:
+                        conf_reasons.append(f"\u2194\ufe0f Konfirmasi 15m: {trend_15m_label} (sideways/netral)")
+                    result["trend_15m"] = trend_15m
+                except Exception:
+                    pass
             # Volume
             if volume_ratio >= 1.5:
                 conf_score += 7
@@ -788,6 +907,7 @@ class StockScanner:
         self,
         watchlist: Optional[List[str]] = None,
         min_score: int = 55,
+        min_volume_ratio: float = 0.0,
         signal_filter: Optional[str] = None,
         skip_prescreen: bool = False,
     ) -> List[ScalpSignal]:
@@ -796,7 +916,7 @@ class StockScanner:
         result = await loop.run_in_executor(
             None,
             lambda: self.scan_all(
-                watchlist, min_score, 1.2, signal_filter, skip_prescreen
+                watchlist, min_score, min_volume_ratio, signal_filter, skip_prescreen
             ),
         )
         return result

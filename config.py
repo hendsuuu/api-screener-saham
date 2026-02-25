@@ -20,9 +20,9 @@ class Settings:
 
     # ─── Screener ─────────────────────────────
     SCAN_INTERVAL_MINUTES: int = int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
-    MIN_SIGNAL_SCORE: int = int(os.getenv("MIN_SIGNAL_SCORE", "60"))
+    MIN_SIGNAL_SCORE: int = int(os.getenv("MIN_SIGNAL_SCORE", "50"))
     MAX_SIGNALS_PER_SCAN: int = int(os.getenv("MAX_SIGNALS_PER_SCAN", "10"))
-    MIN_VOLUME_RATIO: float = float(os.getenv("MIN_VOLUME_RATIO", "1.2"))
+    MIN_VOLUME_RATIO: float = float(os.getenv("MIN_VOLUME_RATIO", "0.0"))  # 0.0 = dinonaktifkan
 
     # ─── Pre-screen Criteria (Dynamic Screener) ───
     # Harga minimum saham (Rp) — filter sub-gocap / penny stock
@@ -64,6 +64,8 @@ class Settings:
 
     # ─── Workers ──────────────────────────────
     MAX_SCAN_WORKERS: int = int(os.getenv("MAX_SCAN_WORKERS", "8"))
+    # Jumlah worker uvicorn untuk production (HARUS 1 karena bot polling)
+    UVICORN_WORKERS: int = int(os.getenv("UVICORN_WORKERS", "1"))
 
     # ─── Data Store ───────────────────────────
     # Direktori penyimpanan file Parquet historis OHLCV

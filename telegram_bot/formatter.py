@@ -480,8 +480,15 @@ Contoh: /signal BBCA</i>
                Contoh: <code>/info BBCA</code>
 /buy          — Daftar sinyal BUY hari ini (max 10)
 /waspada      — Daftar saham kondisi WASPADA hari ini (max 10)
-/market       — Status pasar BEI & ringkasan scan
-/help         — Tampilkan bantuan ini
+/market       — Status pasar BEI &amp; ringkasan scan
+/stocklist    — Daftar semua saham di universe (per sektor)/cek [KODE]   — 🔎 Cek apakah ticker ada di universe
+               Bisa banyak sekaligus: <code>/cek BBCA TLKM ASII</code>/help         — Tampilkan bantuan ini
+
+━━━━━━━━━━━━━━━━━━━━
+<b>🔧 PERINTAH ADMIN:</b>
+/addstock [KD] [Nama]  — Tambah saham ke custom list
+/removestock [KD]      — Hapus saham dari custom list
+/admin                 — Menu admin lengkap
 
 ━━━━━━━━━━━━━━━━━━━━
 <b>🟢 SINYAL BUY — Lengkap dengan:</b>
@@ -513,3 +520,121 @@ ADX • EMA 9/20/50 • ATR • Stochastic • SuperTrend
 ⚠️ <i>Bot ini murni alat bantu analisis teknikal.
 Keputusan trading tetap sepenuhnya di tangan Anda!</i>
 """.strip()
+
+    @staticmethod
+    def format_stocklist(sector_map: dict, custom_stocks: list) -> str:
+        """
+        Format daftar saham universe untuk /stocklist.
+
+        Args:
+            sector_map  : {sector_label: [tickers]} dari get_sector_map()
+            custom_stocks: list dict dari load_custom_stocks()
+        """
+        from data.stock_list import COMPANY_NAMES, IDX_UNIVERSE
+
+        total_builtin = len(IDX_UNIVERSE)
+        total_custom = len(custom_stocks)
+        total = total_builtin + total_custom
+
+        lines = [
+            "📋 <b>DAFTAR SAHAM UNIVERSE</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"📊 Total  : <b>{total}</b> saham",
+            f"🏗 Built-in: {total_builtin} (IDX Universe)",
+            f"➕ Custom  : {total_custom} (ditambah manual)",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+        # Satu baris per sektor
+        from data.stock_list import _BANK as _b  # noqa — just for existence check
+        for sector, tickers in sector_map.items():
+            # Deduplikasi & sort
+            unique = sorted(set(tickers))
+            lines.append(f"\n{sector} <code>[{len(unique)}]</code>")
+            # Tampilkan maks 30 ticker dalam satu baris agar tidak terlalu panjang
+            chunk = "  ".join(unique[:30])
+            if len(unique) > 30:
+                chunk += f"  …+{len(unique)-30}"
+            lines.append(f"<code>{chunk}</code>")
+
+        # Custom stocks
+        if custom_stocks:
+            lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+            lines.append("➕ <b>CUSTOM (Tambahan Manual)</b>")
+            for s in custom_stocks:
+                ticker = html.escape(s.get("ticker", ""))
+                name = html.escape(s.get("name", "") or COMPANY_NAMES.get(s.get("ticker", ""), "-"))
+                added_at = s.get("added_at", "")[:10]
+                lines.append(f"• <b>{ticker}</b>  {name}  <i>({added_at})</i>")
+        else:
+            lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+            lines.append("➕ <i>Belum ada saham custom. Gunakan /addstock TICKER [Nama]</i>")
+
+        lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+        lines.append("💡 Admin: /addstock KODE [Nama Perusahaan]")
+        lines.append("💡 Admin: /removestock KODE")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_cek(results: list) -> str:
+        """
+        Format hasil /cek untuk satu atau banyak ticker.
+
+        Args:
+            results: list of tuples:
+                (ticker, "builtin")               — ada di IDX Universe
+                (ticker, "custom", custom_dict)   — ada di custom list
+                (ticker, "notfound")              — tidak ditemukan
+        """
+        from data.stock_list import COMPANY_NAMES
+
+        total = len(results)
+        found_b = sum(1 for r in results if r[1] == "builtin")
+        found_c = sum(1 for r in results if r[1] == "custom")
+        not_found = sum(1 for r in results if r[1] == "notfound")
+
+        header = "🔎 <b>CEK TICKER</b>"
+        if total > 1:
+            header += (
+                f"\n━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Total dicek   : <b>{total}</b>\n"
+                f"✅ Built-in IDX  : <b>{found_b}</b>\n"
+                f"➕ Custom list   : <b>{found_c}</b>\n"
+                f"❌ Tidak ada     : <b>{not_found}</b>"
+            )
+        header += "\n━━━━━━━━━━━━━━━━━━━━"
+
+        lines = [header]
+        for r in results:
+            ticker = html.escape(r[0])
+            name = html.escape(COMPANY_NAMES.get(r[0], ""))
+
+            if r[1] == "builtin":
+                label = "✅ <b>Ada</b> — IDX Universe (built-in)"
+                name_line = f"   🏷 {name}" if name else ""
+                lines.append(f"\n<b>{ticker}</b>\n{label}{chr(10) + name_line if name_line else ''}")
+
+            elif r[1] == "custom":
+                cdata = r[2] if len(r) > 2 else {}
+                cname = html.escape(cdata.get("name", "") or name)
+                added_at = cdata.get("added_at", "")[:10]
+                label = "➕ <b>Ada</b> — Custom list (tambahan manual)"
+                lines.append(
+                    f"\n<b>{ticker}</b>\n{label}"
+                    + (f"\n   🏷 {cname}" if cname else "")
+                    + (f"\n   📅 Ditambahkan: {added_at}" if added_at else "")
+                )
+
+            else:
+                lines.append(
+                    f"\n<b>{ticker}</b>\n"
+                    f"❌ <b>Tidak ditemukan</b> dalam universe\n"
+                    f"   💡 Admin bisa tambahkan via /addstock {html.escape(r[0])} [Nama]"
+                )
+
+        if not_found > 0:
+            lines.append("\n━━━━━━━━━━━━━━━━━━━━")
+            lines.append("ℹ️ Saham tidak ditemukan belum di-screen. Admin dapat menambahkannya.")
+
+        return "\n".join(lines)
