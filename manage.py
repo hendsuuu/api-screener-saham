@@ -128,15 +128,18 @@ def _api_call(path: str, method: str = "GET", payload: dict | None = None):
         headers = {"X-API-Key": settings.API_SECRET_KEY}
         url = f"{base}{path}"
         if method.upper() == "POST":
-            r = requests.post(url, json=payload or {}, headers=headers, timeout=30)
+            r = requests.post(url, json=payload or {},
+                              headers=headers, timeout=30)
         elif method.upper() == "GET":
             r = requests.get(url, headers=headers, timeout=30)
         else:
-            r = requests.request(method, url, json=payload, headers=headers, timeout=30)
+            r = requests.request(method, url, json=payload,
+                                 headers=headers, timeout=30)
         r.raise_for_status()
         return r.json()
     except ImportError:
-        print("  [!] Package 'requests' belum terinstall. Jalankan: pip install requests")
+        print(
+            "  [!] Package 'requests' belum terinstall. Jalankan: pip install requests")
         return None
     except Exception as e:
         print(f"  [!] API call gagal ({path}): {e}")
@@ -148,12 +151,12 @@ def _print_store_stats(stats: dict):
     print("  ╔═══════════════════════════════════════╗")
     print("  ║        DATA STORE STATISTICS          ║")
     print("  ╠═══════════════════════════════════════╣")
-    print(f"  ║  Path    : {stats.get('store_path','N/A')[:30]}")
+    print(f"  ║  Path    : {stats.get('store_path', 'N/A')[:30]}")
     print(f"  ║  Tickers : {stats.get('total_tickers', 0):>6}")
     print(f"  ║  Baris   : {stats.get('total_rows', 0):>6,}")
     print(f"  ║  Disk    : {stats.get('disk_mb', 0):>6.1f} MB")
-    print(f"  ║  Oldest  : {stats.get('oldest','N/A')}")
-    print(f"  ║  Newest  : {stats.get('newest','N/A')}")
+    print(f"  ║  Oldest  : {stats.get('oldest', 'N/A')}")
+    print(f"  ║  Newest  : {stats.get('newest', 'N/A')}")
     print("  ╠═══════════════════════════════════════╣")
     for iv, info in stats.get("intervals", {}).items():
         print(
@@ -172,11 +175,13 @@ def cmd_start(args):
     """Jalankan uvicorn server di background."""
     pid = _read_pid()
     if pid and _is_running(pid):
-        print(f"  [!] Server sudah berjalan (PID {pid}). Gunakan 'manage.py restart' jika ingin restart.")
+        print(
+            f"  [!] Server sudah berjalan (PID {pid}). Gunakan 'manage.py restart' jika ingin restart.")
         return
 
     from config import settings
-    port = args.port if hasattr(args, "port") and args.port else settings.API_PORT
+    port = args.port if hasattr(
+        args, "port") and args.port else settings.API_PORT
     host = settings.API_HOST
 
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -213,7 +218,8 @@ def cmd_stop(args):
         print("  [!] Tidak ada PID tersimpan. Server mungkin tidak sedang berjalan.")
         return
     if not _is_running(pid):
-        print(f"  [!] Proses PID {pid} sudah tidak berjalan. Membersihkan PID file.")
+        print(
+            f"  [!] Proses PID {pid} sudah tidak berjalan. Membersihkan PID file.")
         _clear_pid()
         return
     print(f"  [*] Menghentikan server PID {pid} ...")
@@ -242,7 +248,8 @@ def cmd_status(args):
     else:
         print("  ║  Server  : 🔴 STOPPED")
         if pid:
-            print(f"  ║           PID {pid} tidak aktif — membersihkan PID file")
+            print(
+                f"  ║           PID {pid} tidak aktif — membersihkan PID file")
             _clear_pid()
 
     # Coba koneksi ke API
@@ -250,7 +257,8 @@ def cmd_status(args):
     if data:
         print(f"  ║  API     : ✓ Responsif")
         print(f"  ║  Pasar   : {data.get('status', 'N/A')}")
-        print(f"  ║  Waktu   : {data.get('time_wib', data.get('waktu', 'N/A'))}")
+        print(
+            f"  ║  Waktu   : {data.get('time_wib', data.get('waktu', 'N/A'))}")
     else:
         print("  ║  API     : ✗ Tidak dapat terhubung")
 
@@ -324,12 +332,14 @@ def cmd_store(args):
     elif subcmd == "delete":
         ticker = getattr(args, "ticker", None)
         if not ticker:
-            print("  [!] Harap sertakan kode saham. Contoh: manage.py store delete BBCA")
+            print(
+                "  [!] Harap sertakan kode saham. Contoh: manage.py store delete BBCA")
             return
         iv = getattr(args, "interval", None)
         deleted = store.delete_ticker(ticker, interval=iv)
         if deleted:
-            print(f"  [✓] Data {ticker} (interval={iv or 'semua'}) dihapus ({deleted} file).")
+            print(
+                f"  [✓] Data {ticker} (interval={iv or 'semua'}) dihapus ({deleted} file).")
         else:
             print(f"  [i] Tidak ada data ditemukan untuk {ticker}.")
 
@@ -369,6 +379,170 @@ def cmd_logs(args):
     tail = lines[-n:]
     print(f"\n  === {LOG_FILE.name} (terakhir {len(tail)} baris) ===")
     print("".join(tail), end="")
+
+
+def cmd_get_data(args):
+    """
+    Crawl data OHLCV historis untuk seluruh IDX Universe.
+
+    Contoh:
+        python manage.py get-data                        # 5y harian + 60d intraday
+        python manage.py get-data --period 2y            # hanya harian 2 tahun
+        python manage.py get-data --interval 5m          # hanya intraday 5m
+        python manage.py get-data --tickers BBCA,BBRI    # saham tertentu
+        python manage.py get-data --update               # incremental update saja
+        python manage.py get-data --workers 8            # lebih banyak thread
+    """
+    from config import settings
+    from data.crawler import DataCrawler
+    from data.store import get_store
+
+    # Parse tickers
+    if hasattr(args, "tickers") and args.tickers:
+        tickers = [t.strip().upper()
+                   for t in args.tickers.split(",") if t.strip()]
+    else:
+        from data.stock_list import IDX_UNIVERSE
+        tickers = IDX_UNIVERSE
+
+    workers = getattr(args, "workers", None) or settings.CRAWL_WORKERS
+    period_daily = getattr(
+        args, "period", None) or settings.CRAWL_HISTORICAL_PERIOD
+    period_intraday = settings.CRAWL_INTRADAY_PERIOD
+    # "1d", "5m", atau "all"
+    interval = getattr(args, "interval", None) or "all"
+    update_only = getattr(args, "update", False)
+
+    crawler = DataCrawler(
+        store=get_store(),
+        workers=workers,
+        batch_size=settings.CRAWL_BATCH_SIZE,
+        delay_seconds=settings.CRAWL_DELAY_SECONDS,
+    )
+
+    # ── Mode: incremental update saja ──────────────────────────────────────
+    if update_only:
+        print(
+            f"\n  [*] Mode: incremental update (5m) untuk {len(tickers)} saham ...")
+        t0 = time.time()
+
+        try:
+            import tqdm
+            _has_tqdm = True
+        except ImportError:
+            _has_tqdm = False
+
+        result = crawler.update_latest(tickers, interval="5m", workers=workers)
+        elapsed = time.time() - t0
+
+        print(f"\n  [✓] Update selesai ({elapsed:.0f}s)")
+        print(f"  [i] Diperbarui : {result['updated']}")
+        print(f"  [i] Di-skip    : {result['skipped']} (data sudah fresh)")
+        print(f"  [i] Gagal      : {result['failed']}")
+        print(f"  [i] Baris baru : +{result['new_rows']}")
+        if result.get('errors'):
+            print(f"  [!] Errors: {', '.join(result['errors'][:5])}")
+        return
+
+    # ── Mode: crawl historis ────────────────────────────────────────────────
+    try:
+        from tqdm import tqdm as _tqdm
+        _has_tqdm = True
+    except ImportError:
+        _has_tqdm = False
+
+    if interval in ("1d", "all"):
+        print(f"\n  ╔═══════════════════════════════════════════╗")
+        print(f"  ║  CRAWL HISTORIS HARIAN ({period_daily})        ║")
+        print(f"  ╠═══════════════════════════════════════════╣")
+        print(f"  ║  Saham   : {len(tickers):>6}                   ║")
+        print(f"  ║  Period  : {period_daily:<30} ║")
+        print(f"  ║  Interval: 1d                             ║")
+        print(f"  ║  Workers : {workers:<30} ║")
+        print(f"  ╚═══════════════════════════════════════════╝")
+        print()
+
+        if _has_tqdm:
+            pbar = _tqdm(total=len(tickers), unit="saham", desc="Harian")
+
+            def _cb_daily(done, total, label):
+                pbar.update(1)
+                pbar.set_postfix({"last": label[:15]})
+
+            t0 = time.time()
+            result_daily = crawler.crawl_historical(
+                tickers, period=period_daily, interval="1d",
+                workers=workers, progress_cb=_cb_daily
+            )
+            pbar.close()
+        else:
+            print("  [*] Untuk progress bar, install tqdm: pip install tqdm")
+
+            def _cb_daily(done, total, label):
+                pct = done / total * 100
+                print(f"  [{done}/{total}] {pct:.0f}% — {label}")
+
+            t0 = time.time()
+            result_daily = crawler.crawl_historical(
+                tickers, period=period_daily, interval="1d",
+                workers=workers, progress_cb=_cb_daily
+            )
+
+        elapsed = time.time() - t0
+        print(f"\n  [✓] Harian selesai ({elapsed:.0f}s)")
+        print(
+            f"  [i] OK: {result_daily['success']} | Gagal: {result_daily['failed']}")
+        if result_daily.get('errors'):
+            print(f"  [!] Contoh error: {result_daily['errors'][0]}")
+
+    if interval in ("5m", "all"):
+        print(f"\n  ╔═══════════════════════════════════════════╗")
+        print(f"  ║  CRAWL INTRADAY 5 MENIT ({period_intraday})        ║")
+        print(f"  ╠═══════════════════════════════════════════╣")
+        print(f"  ║  Saham   : {len(tickers):>6}                   ║")
+        print(f"  ║  Period  : {period_intraday:<30} ║")
+        print(f"  ║  Workers : {workers:<30} ║")
+        print(f"  ╚═══════════════════════════════════════════╝")
+        print()
+
+        if _has_tqdm:
+            pbar2 = _tqdm(total=len(tickers), unit="saham", desc="Intraday")
+
+            def _cb_intra(done, total, ticker):
+                pbar2.update(1)
+                pbar2.set_postfix({"last": ticker[:8]})
+
+            t0 = time.time()
+            result_intra = crawler.crawl_intraday(
+                tickers, period=period_intraday, interval="5m",
+                workers=workers, progress_cb=_cb_intra
+            )
+            pbar2.close()
+        else:
+            def _cb_intra(done, total, ticker):
+                if done % 20 == 0:
+                    pct = done / total * 100
+                    print(f"  [{done}/{total}] {pct:.0f}% — {ticker}")
+
+            t0 = time.time()
+            result_intra = crawler.crawl_intraday(
+                tickers, period=period_intraday, interval="5m",
+                workers=workers, progress_cb=_cb_intra
+            )
+
+        elapsed = time.time() - t0
+        print(f"\n  [✓] Intraday selesai ({elapsed:.0f}s)")
+        print(
+            f"  [i] OK: {result_intra['success']} | Gagal: {result_intra['failed']}")
+        if result_intra.get('errors'):
+            print(f"  [!] Contoh error: {result_intra['errors'][0]}")
+
+    # Show final store stats
+    try:
+        stats = get_store().stats()
+        _print_store_stats(stats)
+    except Exception as e:
+        print(f"  [!] Gagal baca store stats: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,7 +588,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.set_defaults(func=cmd_prescreen)
 
     # ── bot ──────────────────────────────────────────────────────────────────
-    p_bot = sub.add_parser("bot", help="Jalankan bot polling saja (tanpa server)")
+    p_bot = sub.add_parser(
+        "bot", help="Jalankan bot polling saja (tanpa server)")
     p_bot.set_defaults(func=cmd_bot)
 
     # ── logs ─────────────────────────────────────────────────────────────────
@@ -441,14 +616,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_store_list.set_defaults(func=cmd_store)
 
     # store trim
-    p_store_trim = store_sub.add_parser("trim", help="Hapus data lama dari store")
+    p_store_trim = store_sub.add_parser(
+        "trim", help="Hapus data lama dari store")
     p_store_trim.add_argument(
         "--days", type=int, default=None,
         help="Hapus data lebih lama dari N hari (default DATA_STORE_MAX_DAYS)"
     )
     p_store_trim.set_defaults(func=cmd_store)
 
-    # store delete
+    # ── store delete
     p_store_del = store_sub.add_parser("delete", help="Hapus data satu ticker")
     p_store_del.add_argument("ticker", help="Kode saham (contoh: BBCA)")
     p_store_del.add_argument(
@@ -456,6 +632,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hapus hanya interval tertentu (default: semua)"
     )
     p_store_del.set_defaults(func=cmd_store)
+
+    # ── get-data ───────────────────────────────────────────────────────────────
+    p_get = sub.add_parser(
+        "get-data",
+        help="Crawl data OHLCV historis untuk seluruh saham IDX",
+        description=(
+            "Download dan simpan data OHLCV ke Parquet store.\n"
+            "Default: 5 tahun harian + 60 hari intraday 5m untuk ~342 saham.\n\n"
+            "Contoh:\n"
+            "  python manage.py get-data                       # full crawl\n"
+            "  python manage.py get-data --period 2y           # 2 tahun harian\n"
+            "  python manage.py get-data --interval 5m         # intraday saja\n"
+            "  python manage.py get-data --tickers BBCA,BBRI   # saham tertentu\n"
+            "  python manage.py get-data --update              # incremental update\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_get.add_argument(
+        "--period", default=None,
+        help="Periode historis untuk data harian: 1y, 2y, 5y (default dari .env)"
+    )
+    p_get.add_argument(
+        "--interval", default="all", choices=["1d", "5m", "all"],
+        help="Interval yang di-crawl: '1d' (harian), '5m' (intraday), 'all' (default)"
+    )
+    p_get.add_argument(
+        "--tickers", default=None,
+        help="Koma-separated kode saham, contoh: BBCA,BBRI,TLKM (default: seluruh IDX)"
+    )
+    p_get.add_argument(
+        "--workers", type=int, default=None,
+        help="Jumlah thread paralel (default dari .env CRAWL_WORKERS)"
+    )
+    p_get.add_argument(
+        "--update", action="store_true",
+        help="Mode incremental: hanya ambil candle terbaru (cocok untuk cron / cek manual)"
+    )
+    p_get.set_defaults(func=cmd_get_data)
 
     return parser
 

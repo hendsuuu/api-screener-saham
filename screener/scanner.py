@@ -21,6 +21,7 @@ Alur dua tahap:
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -60,7 +61,12 @@ class StockScanner:
 
     def scan_single_stock(self, ticker_raw: str) -> Optional[ScalpSignal]:
         """
-        Scan satu saham dan kembalikan sinyal terbaik (BUY/SELL).
+        Scan satu saham dan kembalikan sinyal terbaik (BUY/WASPADA).
+
+        Strategi data (store-first):
+          1. Coba baca dari Parquet store lokal (instant, no API call)
+          2. Jika data lokal masih segar (< 15 menit), gunakan langsung
+          3. Jika data lokal terlalu lama / tidak ada, fallback ke live API
 
         Args:
             ticker_raw: Kode saham tanpa suffix (contoh: BBCA)
@@ -71,24 +77,56 @@ class StockScanner:
         ticker = get_yahoo_symbol(ticker_raw)
         company_name = COMPANY_NAMES.get(ticker_raw, ticker_raw)
 
+        df_5m = None
+        source = "live"
+
+        # ── Coba baca dari store lokal ──────────────────────────
         try:
-            # Ambil data 5 menit untuk analisis
+            from data.store import get_store
+            store = get_store()
+            df_store = store.load(ticker_raw, "5m", days=5)
+
+            if df_store is not None and len(df_store) >= 50:
+                last_ts = df_store.index.max()
+                age_minutes = (
+                    datetime.utcnow() - last_ts.to_pydatetime().replace(tzinfo=None)
+                ).total_seconds() / 60
+
+                if age_minutes <= 20:  # data segar ≤ 20 menit → pakai store
+                    df_5m = df_store
+                    source = f"store({age_minutes:.0f}m old)"
+                else:
+                    logger.debug(
+                        f"{ticker_raw}: data store {age_minutes:.0f}m lalu, "
+                        f"fallback ke live API"
+                    )
+        except Exception as se:
+            logger.debug(f"{ticker_raw}: gagal baca store: {se}")
+
+        # ── Fallback ke live API ────────────────────────────────
+        if df_5m is None:
             df_5m = self.fetcher.get_intraday_data(
                 ticker,
-                period="5d",    # 5 hari untuk indikator yang butuh banyak data
+                period="5d",
                 interval="5m"
             )
+            source = "live"
 
-            if df_5m is None or len(df_5m) < 50:
-                logger.debug(
-                    f"Data tidak cukup untuk {ticker}: {len(df_5m) if df_5m is not None else 0} candle")
-                return None
+        if df_5m is None or len(df_5m) < 50:
+            logger.debug(
+                f"Data tidak cukup untuk {ticker}: "
+                f"{len(df_5m) if df_5m is not None else 0} candle [{source}]"
+            )
+            return None
 
-            # Coba generate sinyal BUY
+        logger.debug(f"{ticker_raw}: {len(df_5m)} candle [{source}]")
+
+        try:
+            # Generate sinyal BUY
             buy_signal = self.generator.generate_buy_signal(
                 ticker, df_5m, company_name)
 
-            # Coba generate sinyal SELL
+            # Generate sinyal WASPADA/SELL
             sell_signal = self.generator.generate_sell_signal(
                 ticker, df_5m, company_name)
 
@@ -104,6 +142,11 @@ class StockScanner:
 
         except Exception as e:
             logger.error(f"Error scan {ticker}: {e}")
+            try:
+                from logs.error_tracker import tracker
+                tracker.track(ticker_raw, "scanner.scan_single", e)
+            except Exception:
+                pass
             return None
 
     def scan_all(
@@ -265,9 +308,11 @@ class StockScanner:
         total = len(results)
         buy_count = sum(1 for s in results if s.signal_type == "BUY")
         # WASPADA adalah pengganti SELL di BEI
-        sell_count = sum(1 for s in results if s.signal_type in ("WASPADA", "SELL"))
+        sell_count = sum(
+            1 for s in results if s.signal_type in ("WASPADA", "SELL"))
         strong_count = sum(1 for s in results if s.strength == "STRONG")
-        avg_score = sum(s.signal_score for s in results) / total if total > 0 else 0
+        avg_score = sum(s.signal_score for s in results) / \
+            total if total > 0 else 0
         avg_rsi = sum(s.rsi for s in results) / total if total > 0 else 50
 
         if buy_count > sell_count * 1.5:

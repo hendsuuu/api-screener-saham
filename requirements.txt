@@ -1,14 +1,10 @@
-# ═══════════════════════════════════════════════════
-#  SAHAM SCALPER BOT - Dependencies
-#  Install: pip install -r requirements.txt
-# ═══════════════════════════════════════════════════
-
 # ─── Web Framework ──────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 
 # ─── Data Source (Yahoo Finance) ────────────────
-yfinance==0.2.50
+yfinance>=1.2.0             # yfinance 1.x wajib untuk auth Yahoo Finance baru
+curl_cffi>=0.7              # HTTP dengan Chrome impersonation (dibutuhkan yfinance 1.x)
 pandas==2.2.3
 numpy==1.26.4
 
@@ -31,7 +27,10 @@ httpx==0.28.1
 
 # ─── Data & Analysis ────────────────────────────
 scipy==1.14.1
-ta==0.11.0          # Technical Analysis library (opsional, backup)pyarrow>=14.0.0     # Engine Parquet untuk persistent OHLCV store
+ta==0.11.0          # Technical Analysis library (opsional, backup)
+pyarrow>=14.0.0     # Engine Parquet untuk persistent OHLCV store
+tqdm>=4.66.0        # Progress bar untuk crawling historis
+
 # ─── Logging & Monitoring ───────────────────────
 loguru==0.7.3
 

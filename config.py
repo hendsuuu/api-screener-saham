@@ -21,7 +21,7 @@ class Settings:
     # ─── Screener ─────────────────────────────
     SCAN_INTERVAL_MINUTES: int = int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
     MIN_SIGNAL_SCORE: int = int(os.getenv("MIN_SIGNAL_SCORE", "60"))
-    MAX_SIGNALS_PER_SCAN: int = int(os.getenv("MAX_SIGNALS_PER_SCAN", "3"))
+    MAX_SIGNALS_PER_SCAN: int = int(os.getenv("MAX_SIGNALS_PER_SCAN", "10"))
     MIN_VOLUME_RATIO: float = float(os.getenv("MIN_VOLUME_RATIO", "1.2"))
 
     # ─── Pre-screen Criteria (Dynamic Screener) ───
@@ -67,6 +67,18 @@ class Settings:
     DATA_STORE_PATH: str = os.getenv("DATA_STORE_PATH", "data/store")
     # Berapa hari data yang disimpan (prune otomatis via manage.py)
     DATA_STORE_MAX_DAYS: int = int(os.getenv("DATA_STORE_MAX_DAYS", "365"))
+
+    # ─── Crawler (Historical + Incremental) ──
+    # Periode historis untuk crawl harian (1y / 2y / 5y)
+    CRAWL_HISTORICAL_PERIOD: str = os.getenv("CRAWL_HISTORICAL_PERIOD", "5y")
+    # Periode intraday 5m (yfinance max 60d untuk interval 5m)
+    CRAWL_INTRADAY_PERIOD: str = os.getenv("CRAWL_INTRADAY_PERIOD", "60d")
+    # Jumlah thread paralel untuk crawl
+    CRAWL_WORKERS: int = int(os.getenv("CRAWL_WORKERS", "4"))
+    # Jumlah ticker per batch saat yf.download
+    CRAWL_BATCH_SIZE: int = int(os.getenv("CRAWL_BATCH_SIZE", "20"))
+    # Jeda antar batch (detik) untuk menghindari rate-limit
+    CRAWL_DELAY_SECONDS: float = float(os.getenv("CRAWL_DELAY_SECONDS", "0.5"))
 
     # ─── Admin Bot ────────────────────────────
     # Chat ID pribadi yang boleh mengirim perintah admin ke bot

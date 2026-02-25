@@ -1,6 +1,16 @@
 """
-Job Scheduler - Menjalankan scan otomatis pada interval tertentu
+Job Scheduler - Menjalankan update data & scan otomatis pada interval tertentu
 Hanya aktif saat jam bursa BEI
+
+Alur baru (data-first):
+  ┌────────────────────────────────────────────────────────┐
+  │  Setiap 15 menit (jam bursa)                           │
+  │    1. DataCrawler.update_latest() → perbarui store     │
+  │    2. StockScanner.scan_all()     → baca dari store    │
+  │    3. TelegramNotifier            → kirim sinyal terbaik│
+  └────────────────────────────────────────────────────────┘
+
+Manfaat: scanner membaca data Parquet lokal (cepat, tanpa API call live).
 """
 
 import asyncio
@@ -53,23 +63,24 @@ class ScanScheduler:
         """Daftarkan semua jobs ke scheduler."""
 
         # ╔══════════════════════════════════════════════════════╗
-        # ║  SCAN OTOMATIS SETIAP 15 MENIT (jam bursa BEI)      ║
-        # ║  Trigger aktif jam 09–14, menit ke-5/20/35/50       ║
-        # ║  → Dalam job, is_market_open() menyaring waktu di   ║
-        # ║    luar sesi (istirahat siang & setelah close)       ║
+        # ║  FETCH DATA + SCAN SETIAP 15 MENIT (jam bursa BEI) ║
+        # ║  Urutan:                                             ║
+        # ║    1. update_latest() → perbarui Parquet store      ║
+        # ║    2. scan_all()      → baca dari store (cepat)     ║
+        # ║    3. Kirim sinyal terbaik ke Telegram               ║
         # ╚══════════════════════════════════════════════════════╝
         self.scheduler.add_job(
-            self._job_scan_and_notify,
+            self._job_fetch_and_scan,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
-                hour="9-14",          # mencakup sesi 1 dan sesi 2
-                minute="5,20,35,50",  # tepat setiap 15 menit mulai menit ke-5
+                hour="9-14",
+                minute="5,20,35,50",
                 timezone=WIB,
             ),
-            id="scan_15min",
-            name=f"Scan Otomatis 15 Menit",
-            max_instances=1,          # cegah tumpang tindih jika scan lebih lama dari 15 menit
-            misfire_grace_time=120,   # toleransi 2 menit jika ada keterlambatan
+            id="fetch_and_scan_15min",
+            name="Fetch Data + Scan 15 Menit",
+            max_instances=1,
+            misfire_grace_time=120,
         )
 
         # ╔══════════════════════════════════════╗
@@ -108,23 +119,46 @@ class ScanScheduler:
         logger.info(
             f"Jobs terdaftar: {len(self.scheduler.get_jobs())} job aktif")
 
-    async def _job_scan_and_notify(self):
-        """Job utama: scan + kirim sinyal terbaik."""
-        logger.info(
-            f"[SCHEDULER] Memulai scan otomatis ({datetime.now(WIB).strftime('%H:%M WIB')})")
+    async def _job_fetch_and_scan(self):
+        """
+        Job utama (data-first):
+          1. Update Parquet store → ambil candle terbaru dari yfinance
+          2. Scan saham    → baca dari store (cepat, tanpa API call live)
+          3. Notifikasi    → kirim sinyal terbaik ke Telegram
+        """
+        now_str = datetime.now(WIB).strftime("%H:%M WIB")
+        logger.info(f"[SCHEDULER] Job fetch+scan dimulai ({now_str})")
 
         if not self.fetcher.is_market_open():
-            logger.info("[SCHEDULER] Pasar tutup, scan dilewati")
+            logger.info("[SCHEDULER] Pasar tutup, job dilewati")
             return
 
         try:
+            from data.crawler import get_crawler
+            from data.stock_list import IDX_UNIVERSE
+
+            # ── Tahap 1: Update store ─────────────────────────────
+            logger.info("[SCHEDULER] Tahap 1 — Update data store ...")
+            crawler = get_crawler()
+            loop = asyncio.get_event_loop()
+            update_result = await loop.run_in_executor(
+                None,
+                lambda: crawler.update_latest(IDX_UNIVERSE, interval="5m")
+            )
+            logger.info(
+                f"[SCHEDULER] Store diperbarui: "
+                f"{update_result.get('updated', 0)} ticker, "
+                f"+{update_result.get('new_rows', 0)} baris baru"
+            )
+
+            # ── Tahap 2: Scan dari store ─────────────────────────
+            logger.info("[SCHEDULER] Tahap 2 — Scan saham dari store ...")
             from telegram_bot.bot import TelegramNotifier
             from telegram_bot.formatter import TelegramFormatter
 
             notifier = TelegramNotifier(self.telegram_token, self.chat_ids)
             formatter = TelegramFormatter()
 
-            # Scan semua saham
             signals = await self.scanner.scan_all_async(min_score=60)
 
             if not signals:
@@ -133,22 +167,35 @@ class ScanScheduler:
 
             market = self.fetcher.get_market_status()
 
-            # Kirim ringkasan
+            # ── Tahap 3: Notifikasi ──────────────────────────────
             await notifier.send_summary(signals, market)
             await asyncio.sleep(2)
 
-            # Kirim top 3 sinyal BUY detail saja (WASPADA sudah ada di summary)
             top_buy = [s for s in signals if s.signal_type == "BUY"][:3]
             if top_buy:
                 sent = await notifier.send_signals_batch(top_buy, max_signals=3)
-                logger.info(f"[SCHEDULER] {sent} sinyal BUY dikirim ke Telegram")
+                logger.info(
+                    f"[SCHEDULER] {sent} sinyal BUY dikirim ke Telegram")
 
             warn_count = sum(1 for s in signals if s.signal_type == "WASPADA")
             if warn_count:
-                logger.info(f"[SCHEDULER] {warn_count} sinyal WASPADA disertakan dalam summary")
+                logger.info(
+                    f"[SCHEDULER] {warn_count} sinyal WASPADA disertakan dalam summary"
+                )
 
         except Exception as e:
-            logger.error(f"[SCHEDULER] Error job scan: {e}", exc_info=True)
+            logger.error(
+                f"[SCHEDULER] Error job fetch+scan: {e}", exc_info=True)
+            try:
+                from logs.error_tracker import tracker
+                tracker.track("scheduler", "job_fetch_and_scan", e)
+            except Exception:
+                pass
+
+    # ── Alias untuk kompatibilitas backward ──────────────────────────────────
+    async def _job_scan_and_notify(self):
+        """Alias menuju _job_fetch_and_scan (backward compat)."""
+        await self._job_fetch_and_scan()
 
     async def _job_market_open(self):
         """Notifikasi pasar buka + scan awal."""

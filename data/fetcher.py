@@ -93,6 +93,11 @@ class StockDataFetcher:
                 df = df.dropna(subset=["Open", "High", "Low", "Close"])
                 df.index = pd.to_datetime(df.index)
 
+                # Hapus kolom non-OHLCV (yfinance 1.x: Dividends, Stock Splits)
+                _keep = [c for c in ["Open", "High", "Low",
+                                     "Close", "Volume"] if c in df.columns]
+                df = df[_keep]
+
                 if df.empty:
                     logger.debug(f"Data {ticker} kosong setelah dropna")
                     return None
@@ -147,6 +152,10 @@ class StockDataFetcher:
                     return None
 
                 df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                # Hapus kolom non-OHLCV (yfinance 1.x: Dividends, Stock Splits)
+                _keep = [c for c in ["Open", "High", "Low",
+                                     "Close", "Volume"] if c in df.columns]
+                df = df[_keep]
                 if df.empty:
                     return None
 
@@ -155,7 +164,8 @@ class StockDataFetcher:
                     try:
                         self.store.upsert(ticker, "1d", df)
                     except Exception as _se:
-                        logger.debug(f"Store upsert (daily) skip [{ticker}]: {_se}")
+                        logger.debug(
+                            f"Store upsert (daily) skip [{ticker}]: {_se}")
 
                 return df
 

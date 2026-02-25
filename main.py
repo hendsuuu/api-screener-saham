@@ -270,6 +270,11 @@ async def root():
             "prescreen_criteria": "PATCH /prescreen/criteria",
             "scheduler_jobs": "GET /scheduler/jobs",
             "manual_trigger": "POST /scheduler/trigger",
+            "data_fetch": "POST /data/fetch",
+            "data_update": "POST /data/update",
+            "data_status": "GET /data/status",
+            "errors_recent": "GET /errors/recent",
+            "errors_stats": "GET /errors/stats",
         },
         "universe_size": len(IDX_UNIVERSE),
         "prescreen_criteria": {
@@ -577,6 +582,195 @@ async def update_prescreen_criteria(
             "max_price": new_criteria.max_price,
         }
     }
+
+
+# ════════════════════════════════════════════════
+# DATA CRAWL ENDPOINTS
+# ════════════════════════════════════════════════
+
+class FetchRequest(BaseModel):
+    tickers: Optional[List[str]] = None       # None = seluruh IDX_UNIVERSE
+    period: Optional[str] = None              # "5y", "2y", dll. (harian)
+    intraday_period: Optional[str] = None     # "60d", "30d" (5m)
+    interval: str = "all"                     # "1d", "5m", "all"
+    workers: Optional[int] = None
+
+
+@app.post("/data/fetch", tags=["Data"])
+async def trigger_data_fetch(
+    req: FetchRequest,
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(verify_api_key),
+):
+    """
+    Trigger crawl historis OHLCV di background.
+
+    - interval="1d"  → hanya data harian (cepat, ~5–15 menit)
+    - interval="5m"  → hanya intraday 5m (lebih lama)
+    - interval="all" → keduanya (default)
+
+    Gunakan **GET /data/status** untuk memantau progress.
+    """
+    from data.crawler import get_crawl_status, _status as crawl_status_obj
+
+    current = get_crawl_status()
+    if current["state"] == "running":
+        return {
+            "status": "already_running",
+            "message": "Crawl sedang berlangsung. Pantau progress via GET /data/status",
+            "progress": current,
+        }
+
+    tickers = req.tickers or IDX_UNIVERSE
+
+    background_tasks.add_task(
+        _background_crawl,
+        tickers=tickers,
+        period=req.period or settings.CRAWL_HISTORICAL_PERIOD,
+        intraday_period=req.intraday_period or settings.CRAWL_INTRADAY_PERIOD,
+        interval=req.interval,
+        workers=req.workers or settings.CRAWL_WORKERS,
+    )
+
+    return {
+        "status": "started",
+        "message": f"Crawl dimulai untuk {len(tickers)} saham (interval={req.interval})",
+        "tickers": len(tickers),
+        "interval": req.interval,
+    }
+
+
+async def _background_crawl(
+    tickers: List[str],
+    period: str,
+    intraday_period: str,
+    interval: str,
+    workers: int,
+):
+    """Background task untuk crawl historis."""
+    from data.crawler import DataCrawler, get_store
+    from data.store import get_store as gs
+
+    crawler = DataCrawler(
+        store=gs(),
+        workers=workers,
+        batch_size=settings.CRAWL_BATCH_SIZE,
+        delay_seconds=settings.CRAWL_DELAY_SECONDS,
+    )
+
+    loop = asyncio.get_event_loop()
+
+    try:
+        if interval in ("1d", "all"):
+            await loop.run_in_executor(
+                None,
+                lambda: crawler.crawl_historical(
+                    tickers, period=period, interval="1d")
+            )
+
+        if interval in ("5m", "all"):
+            await loop.run_in_executor(
+                None,
+                lambda: crawler.crawl_intraday(
+                    tickers, period=intraday_period, interval="5m")
+            )
+    except Exception as e:
+        logger.error(f"Background crawl error: {e}", exc_info=True)
+
+
+@app.post("/data/update", tags=["Data"])
+async def trigger_incremental_update(
+    background_tasks: BackgroundTasks,
+    tickers: Optional[List[str]] = None,
+    _: bool = Depends(verify_api_key),
+):
+    """
+    Trigger incremental update (ambil candle terbaru saja).
+    Cocok dipanggil manual untuk memperbarui store sebelum scan.
+    """
+    ticker_list = tickers or IDX_UNIVERSE
+    background_tasks.add_task(_background_update, ticker_list)
+    return {
+        "status": "started",
+        "message": f"Incremental update dimulai untuk {len(ticker_list)} saham",
+        "tickers": len(ticker_list),
+    }
+
+
+async def _background_update(tickers: List[str]):
+    from data.crawler import get_crawler
+    loop = asyncio.get_event_loop()
+    try:
+        crawler = get_crawler()
+        result = await loop.run_in_executor(
+            None,
+            lambda: crawler.update_latest(tickers, interval="5m")
+        )
+        logger.info(
+            f"[API] Incremental update selesai: "
+            f"{result.get('updated', 0)} diperbarui, "
+            f"+{result.get('new_rows', 0)} baris"
+        )
+    except Exception as e:
+        logger.error(f"Background update error: {e}", exc_info=True)
+
+
+@app.get("/data/status", tags=["Data"])
+async def get_data_status(_: bool = Depends(verify_api_key)):
+    """
+    Status crawl data saat ini (progress, error summary, store stats).
+    """
+    from data.crawler import get_crawl_status
+    from data.store import get_store
+
+    crawl = get_crawl_status()
+    try:
+        store_stats = get_store().stats()
+    except Exception:
+        store_stats = {}
+
+    return {
+        "crawl": crawl,
+        "store": store_stats,
+    }
+
+
+# ════════════════════════════════════════════════
+# ERROR TRACKING ENDPOINTS
+# ════════════════════════════════════════════════
+
+@app.get("/errors/recent", tags=["Errors"])
+async def get_recent_errors(
+    n: int = Query(default=50, ge=1, le=500,
+                   description="Jumlah error terbaru"),
+    _: bool = Depends(verify_api_key),
+):
+    """
+    Tampilkan N error request terbaru (yfinance timeout, empty data, dll.).
+    Berguna untuk diagnosa saham mana yang sering gagal di-fetch.
+    """
+    from logs.error_tracker import tracker
+    return {
+        "total_in_buffer": len(tracker.get_recent(500)),
+        "errors": tracker.get_recent(n),
+    }
+
+
+@app.get("/errors/stats", tags=["Errors"])
+async def get_error_stats(_: bool = Depends(verify_api_key)):
+    """
+    Statistik error: breakdown per ticker, per operasi, per tipe error, per jam.
+    """
+    from logs.error_tracker import tracker
+    return tracker.get_stats()
+
+
+@app.delete("/errors/clear", tags=["Errors"])
+async def clear_errors(_: bool = Depends(verify_api_key)):
+    """Hapus buffer error in-memory (file JSONL tidak terpengaruh)."""
+    from logs.error_tracker import tracker
+    n = tracker.clear()
+    return {"status": "cleared", "removed": n}
 
 
 # ════════════════════════════════════════════════
