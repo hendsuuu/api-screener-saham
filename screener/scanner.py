@@ -25,6 +25,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import numpy as np
+import pandas as pd
+
 from data.fetcher import StockDataFetcher
 from data.stock_list import (
     IDX_UNIVERSE, SCREENER_WATCHLIST,
@@ -265,6 +268,442 @@ class StockScanner:
                 logger.debug(f"Signal cache write skip: {_ce}")
 
         return filtered
+
+    # ── /info deep analysis ──────────────────────────────────────────────────
+
+    def analyze_stock_info(self, ticker_raw: str) -> dict:
+        """
+        Analisis mendalam satu saham untuk perintah /info.
+
+        Menggabungkan data harian (tren jangka menengah) dan intraday 5m
+        (momentum pendek) untuk memberi gambaran komprehensif:
+          - Trend (bullish / bearish / sideways) + kekuatannya
+          - Zona support & resistance lewat swing high/low + EMA
+          - Potensi ke depan: probabilistik berdasarkan indikator
+          - Risiko utama yang perlu diperhatikan
+          - Skor confidence mengapa angkanya segitu
+
+        Returns dict dengan key:
+          ticker, company_name, last_price, change_pct,
+          trend, trend_detail, ema_alignment,
+          support, resistance, support2, resistance2,
+          rsi, rsi_zone, macd_signal, bb_position,
+          volume_ratio, adx, atr_pct,
+          potential, potential_detail,
+          risk, risk_detail,
+          confidence, confidence_reasons,
+          signals_found (ScalpSignal | None)
+        """
+        from data.stock_list import get_yahoo_symbol, COMPANY_NAMES
+
+        company_name = COMPANY_NAMES.get(ticker_raw, ticker_raw)
+        result = {
+            "ticker": ticker_raw,
+            "company_name": company_name,
+            "last_price": 0.0,
+            "change_pct": 0.0,
+            "trend": "UNKNOWN",
+            "trend_detail": "Data tidak tersedia",
+            "ema_alignment": "N/A",
+            "support": 0.0,
+            "resistance": 0.0,
+            "support2": 0.0,
+            "resistance2": 0.0,
+            "rsi": 50.0,
+            "rsi_zone": "Netral",
+            "macd_signal": "NETRAL",
+            "bb_position": "MIDDLE",
+            "volume_ratio": 1.0,
+            "adx": 0.0,
+            "atr_pct": 0.0,
+            "potential": "NETRAL",
+            "potential_detail": [],
+            "risk": "SEDANG",
+            "risk_detail": [],
+            "confidence": 0,
+            "confidence_reasons": [],
+            "signal_obj": None,
+        }
+
+        try:
+            # ── Load data 5m dari store ─────────────────────────
+            df = None
+            source = "none"
+            try:
+                from data.store import get_store
+                store = get_store()
+                df = store.load(ticker_raw, "5m", days=7)
+                if df is not None and len(df) >= 50:
+                    source = "store_5m"
+            except Exception:
+                pass
+
+            if df is None or len(df) < 50:
+                # fallback live API
+                ticker_yf = get_yahoo_symbol(ticker_raw)
+                df = self.fetcher.get_intraday_data(
+                    ticker_yf, period="5d", interval="5m")
+                source = "live_5m"
+
+            # ── Load data harian untuk tren jangka menengah ─────
+            df_1d = None
+            try:
+                from data.store import get_store
+                df_1d = get_store().load(ticker_raw, "1d", days=90)
+            except Exception:
+                pass
+
+            if df is None or len(df) < 50:
+                result["trend_detail"] = "Data tidak cukup untuk analisis (min 50 candle)"
+                result["confidence_reasons"].append(
+                    "❌ Data intraday tidak tersedia")
+                return result
+
+            # ── Hitung EMA ──────────────────────────────────────
+            df = df.copy()
+            df["ema9"] = df["Close"].ewm(span=9,  adjust=False).mean()
+            df["ema20"] = df["Close"].ewm(span=20, adjust=False).mean()
+            df["ema50"] = df["Close"].ewm(span=50, adjust=False).mean()
+
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            last_price = float(last["Close"])
+            # harga awal sesi ~78 candle 5m = 390m
+            open_price = float(df.iloc[-int(min(78, len(df)-1))]["Open"])
+            change_pct = (
+                last_price - float(df.iloc[-2]["Close"])) / float(df.iloc[-2]["Close"]) * 100
+            vol_today = float(last["Volume"])
+            vol_avg = float(df["Volume"].rolling(20).mean().iloc[-1])
+            volume_ratio = vol_today / vol_avg if vol_avg > 0 else 1.0
+
+            # ── EMA alignment ───────────────────────────────────
+            e9 = float(last["ema9"])
+            e20 = float(last["ema20"])
+            e50 = float(last["ema50"])
+
+            if e9 > e20 > e50:
+                ema_align = "BULLISH_FULL"       # golden alignment
+                trend = "BULLISH"
+            elif e9 > e20 and e9 < e50:
+                ema_align = "BULLISH_WEAK"       # EMA9 di atas EMA20 tapi EMA50 masih menekan
+                trend = "UPTREND_WEAK"
+            elif e9 < e20 < e50:
+                ema_align = "BEARISH_FULL"       # death alignment
+                trend = "BEARISH"
+            elif e9 < e20 and e9 > e50:
+                ema_align = "BEARISH_WEAK"
+                trend = "DOWNTREND_WEAK"
+            else:
+                ema_align = "SIDEWAYS"
+                trend = "SIDEWAYS"
+
+            # EMA 20 cross dalam 5 candle terakhir?
+            ema_cross_up = any(df["ema9"].iloc[i] > df["ema20"].iloc[i] and
+                               df["ema9"].iloc[i-1] <= df["ema20"].iloc[i-1]
+                               for i in range(-5, 0))
+            ema_cross_down = any(df["ema9"].iloc[i] < df["ema20"].iloc[i] and
+                                 df["ema9"].iloc[i-1] >= df["ema20"].iloc[i-1]
+                                 for i in range(-5, 0))
+
+            # ── RSI ─────────────────────────────────────────────
+            delta = df["Close"].diff()
+            gain = delta.clip(lower=0).rolling(9).mean()
+            loss = (-delta.clip(upper=0)).rolling(9).mean()
+            rs = gain / loss.replace(0, np.nan)
+            rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+            if rsi >= 70:
+                rsi_zone = "Overbought — potensi koreksi"
+            elif rsi <= 30:
+                rsi_zone = "Oversold — potensi reversal naik"
+            elif 50 <= rsi < 70:
+                rsi_zone = "Bullish Zone (30–70)"
+            elif 35 < rsi < 50:
+                rsi_zone = "Relatif Lemah"
+            else:
+                rsi_zone = "Sangat Lemah / Potensi Bounce"
+
+            # ── MACD ─────────────────────────────────────────────
+            ema12 = df["Close"].ewm(span=12, adjust=False).mean()
+            ema26 = df["Close"].ewm(span=26, adjust=False).mean()
+            macd_line = ema12 - ema26
+            signal_l = macd_line.ewm(span=9, adjust=False).mean()
+            macd_hist = macd_line - signal_l
+            macd_sig = "BULLISH" if float(
+                macd_line.iloc[-1]) > float(signal_l.iloc[-1]) else "BEARISH"
+            macd_cross_up = float(macd_line.iloc[-1]) > float(signal_l.iloc[-1]) and float(
+                macd_line.iloc[-2]) <= float(signal_l.iloc[-2])
+            macd_cross_down = float(macd_line.iloc[-1]) < float(
+                signal_l.iloc[-1]) and float(macd_line.iloc[-2]) >= float(signal_l.iloc[-2])
+
+            # ── Bollinger Bands ──────────────────────────────────
+            bb_mid = df["Close"].rolling(20).mean()
+            bb_std = df["Close"].rolling(20).std()
+            bb_up = bb_mid + 2 * bb_std
+            bb_low = bb_mid - 2 * bb_std
+            bb_pct = (float(last["Close"]) - float(bb_low.iloc[-1])) / \
+                max(float(bb_up.iloc[-1]) - float(bb_low.iloc[-1]), 1)
+            if bb_pct > 0.85:
+                bb_pos = "UPPER (overbought)"
+            elif bb_pct < 0.15:
+                bb_pos = "LOWER (oversold)"
+            else:
+                bb_pos = "MIDDLE"
+
+            # ── ATR ──────────────────────────────────────────────
+            hi = df["High"]
+            lo = df["Low"]
+            cl = df["Close"]
+            tr = pd.concat([hi - lo, (hi - cl.shift()).abs(),
+                           (lo - cl.shift()).abs()], axis=1).max(axis=1)
+            atr = float(tr.rolling(14).mean().iloc[-1])
+            atr_pct = atr / last_price * 100
+
+            # ── ADX ──────────────────────────────────────────────
+            plus_dm = df["High"].diff().clip(lower=0)
+            minus_dm = (-df["Low"].diff()).clip(lower=0)
+            tr14 = tr.rolling(14).mean()
+            pdm14 = plus_dm.rolling(14).mean()
+            mdm14 = minus_dm.rolling(14).mean()
+            pdi = 100 * pdm14 / tr14.replace(0, np.nan)
+            mdi = 100 * mdm14 / tr14.replace(0, np.nan)
+            dx = (abs(pdi - mdi) / (pdi + mdi) * 100).replace(np.nan, 0)
+            adx = float(dx.rolling(14).mean().iloc[-1])
+
+            # ── Support & Resistance dari swing high/low ─────────
+            window = 10
+            highs = df["High"].rolling(window, center=True).max()
+            lows = df["Low"].rolling(window, center=True).min()
+            is_sh = (df["High"] == highs) & (df["High"] > df["High"].shift(1)) & (
+                df["High"] > df["High"].shift(-1))
+            is_sl = (df["Low"] == lows) & (df["Low"] < df["Low"].shift(1)) & (
+                df["Low"] < df["Low"].shift(-1))
+
+            swing_highs = sorted(
+                df["High"][is_sh].dropna().unique(), reverse=True)
+            swing_lows = sorted(df["Low"][is_sl].dropna().unique())
+
+            resistance = float(
+                next((h for h in swing_highs if h > last_price * 1.002), last_price * 1.03))
+            resistance2 = float(
+                next((h for h in swing_highs if h > resistance), resistance * 1.02))
+            support = float(
+                next((l for l in swing_lows if l < last_price * 0.998), last_price * 0.97))
+            support2 = float(
+                next((l for l in swing_lows if l < support), support * 0.97))
+
+            # Jika ada data harian, pakai high/low 30 hari sebagai R/S sekunder
+            if df_1d is not None and len(df_1d) >= 20:
+                d1_recent = df_1d.tail(30)
+                daily_res = float(d1_recent["High"].max())
+                daily_sup = float(d1_recent["Low"].min())
+                resistance2 = max(resistance2, daily_res)
+                support2 = min(support2,    daily_sup)
+
+            # ── Confidence score ─────────────────────────────────
+            conf_score = 50  # base
+            conf_reasons = []
+
+            # EMA alignment
+            if ema_align == "BULLISH_FULL":
+                conf_score += 20
+                conf_reasons.append(
+                    "✅ EMA9 > EMA20 > EMA50 (golden alignment)")
+            elif ema_align == "BEARISH_FULL":
+                conf_score -= 20
+                conf_reasons.append(
+                    "⚠️ EMA9 < EMA20 < EMA50 (death alignment)")
+            elif ema_align == "BULLISH_WEAK":
+                conf_score += 8
+                conf_reasons.append(
+                    "⚡ EMA9 > EMA20 tapi EMA50 masih di atas (tren lemah)")
+            elif ema_align == "BEARISH_WEAK":
+                conf_score -= 8
+                conf_reasons.append(
+                    "⚡ EMA9 < EMA20 tapi EMA50 masih mendukung")
+
+            # EMA cross recent
+            if ema_cross_up:
+                conf_score += 12
+                conf_reasons.append(
+                    "✅ EMA9 baru saja cross UP EMA20 (5 candle terakhir)")
+            if ema_cross_down:
+                conf_score -= 12
+                conf_reasons.append(
+                    "⚠️ EMA9 baru saja cross DOWN EMA20 (5 candle terakhir)")
+
+            # RSI
+            if 40 <= rsi <= 60:
+                conf_score += 5
+                conf_reasons.append(
+                    "✅ RSI di zona netral-kuat, ruang gerak tersedia")
+            elif rsi > 75:
+                conf_score -= 15
+                conf_reasons.append(
+                    f"⚠️ RSI={rsi:.0f} sudah overbought, risiko koreksi tinggi")
+            elif rsi < 25:
+                conf_score -= 10
+                conf_reasons.append(
+                    f"⚡ RSI={rsi:.0f} oversold ekstrem, potensi bounce tapi hati-hati")
+            elif 60 < rsi < 75:
+                conf_score += 10
+                conf_reasons.append(
+                    f"✅ RSI={rsi:.0f} bullish zona, masih ada ruang naik")
+
+            # MACD
+            if macd_sig == "BULLISH":
+                conf_score += 10
+                conf_reasons.append(
+                    "✅ MACD di atas signal line (momentum positif)")
+            else:
+                conf_score -= 10
+                conf_reasons.append(
+                    "⚠️ MACD di bawah signal line (momentum negatif)")
+            if macd_cross_up:
+                conf_score += 8
+                conf_reasons.append("✅ MACD fresh bullish crossover!")
+            if macd_cross_down:
+                conf_score -= 8
+                conf_reasons.append("⚠️ MACD fresh bearish crossover")
+
+            # ADX
+            if adx >= 25:
+                conf_score += 8
+                conf_reasons.append(
+                    f"✅ ADX={adx:.0f} — tren kuat, momentum valid")
+            elif adx < 18:
+                conf_score -= 8
+                conf_reasons.append(
+                    f"⚠️ ADX={adx:.0f} — pasar sideways, tren lemah")
+
+            # Volume
+            if volume_ratio >= 1.5:
+                conf_score += 7
+                conf_reasons.append(
+                    f"✅ Volume {volume_ratio:.1f}x rata-rata (smart money masuk)")
+            elif volume_ratio < 0.7:
+                conf_score -= 5
+                conf_reasons.append(
+                    f"⚠️ Volume rendah ({volume_ratio:.1f}x), konfirmasi lemah")
+
+            conf_score = max(10, min(95, conf_score))
+
+            # ── Potential & Risk assessment ──────────────────────
+            potential_detail = []
+            risk_detail = []
+
+            # Potential
+            upside_r1 = (resistance - last_price) / last_price * 100
+            upside_r2 = (resistance2 - last_price) / last_price * 100
+            potential_detail.append(
+                f"📈 Target R1: Rp {resistance:,.0f} (+{upside_r1:.1f}%)")
+            potential_detail.append(
+                f"📈 Target R2: Rp {resistance2:,.0f} (+{upside_r2:.1f}%)")
+
+            if trend in ("BULLISH", "UPTREND_WEAK") and macd_sig == "BULLISH" and rsi < 70:
+                potential = "BULLISH"
+                potential_detail.insert(
+                    0, "🟢 Kondisi teknikal mendukung kelanjutan naik")
+            elif trend in ("BEARISH", "DOWNTREND_WEAK") and macd_sig == "BEARISH":
+                potential = "BEARISH"
+                potential_detail.insert(
+                    0, "🔴 Kondisi teknikal menunjuk potensi lanjut turun")
+            elif ema_cross_up or macd_cross_up:
+                potential = "POTENSI REVERSAL NAIK"
+                potential_detail.insert(
+                    0, "⚡ Ada sinyal awal reversal — konfirmasi volume dibutuhkan")
+            else:
+                potential = "SIDEWAYS / WAIT"
+                potential_detail.insert(
+                    0, "↔️ Belum ada bias jelas — tunggu breakout atau konfirmasi")
+
+            # Risk
+            downside_s1 = (last_price - support) / last_price * 100
+            risk_detail.append(
+                f"📉 Support S1: Rp {support:,.0f} (-{downside_s1:.1f}%)")
+            risk_detail.append(
+                f"📉 Support S2: Rp {support2:,.0f} (-{(last_price-support2)/last_price*100:.1f}%)")
+
+            if rsi > 70:
+                risk_detail.append(
+                    "⚠️ Overbought — risiko profit taking meningkat")
+            if adx < 18:
+                risk_detail.append(
+                    "⚠️ Tren lemah — posisi scalping mudah kena noise")
+            if bb_pct > 0.85:
+                risk_detail.append(
+                    "⚠️ Harga di Upper Bollinger Band — potensi mean-reversion")
+            if volume_ratio < 1.0:
+                risk_detail.append(
+                    "⚠️ Volume di bawah rata-rata — likuiditas intraday berkurang")
+            if atr_pct > 3.0:
+                risk_detail.append(
+                    f"⚠️ ATR tinggi {atr_pct:.1f}% — volatilitas besar, perhitungkan SL lebih lebar")
+
+            if conf_score >= 70:
+                risk = "RENDAH-SEDANG"
+            elif conf_score >= 50:
+                risk = "SEDANG"
+            else:
+                risk = "TINGGI"
+
+            # ── trend_detail teks ────────────────────────────────
+            ema_desc = {
+                "BULLISH_FULL":  "EMA9 > EMA20 > EMA50 — uptrend solid",
+                "BULLISH_WEAK":  "EMA9 > EMA20 tapi EMA50 masih di atas — momentum membangun",
+                "BEARISH_FULL":  "EMA9 < EMA20 < EMA50 — downtrend aktif",
+                "BEARISH_WEAK":  "EMA9 < EMA20 tapi masih di atas EMA50 — koreksi short-term",
+                "SIDEWAYS":      "EMA9 ≈ EMA20 — konsolidasi / sideways",
+            }.get(ema_align, ema_align)
+
+            # ── Juga scan normal untuk ScalpSignal ───────────────
+            try:
+                sig_obj = self.scan_single_stock(ticker_raw)
+            except Exception:
+                sig_obj = None
+
+            # ── Tulis hasil ─────────────────────────────────────
+            result.update({
+                "last_price":        last_price,
+                "change_pct":        round(change_pct, 2),
+                "trend":             trend,
+                "trend_detail":      ema_desc,
+                "ema_alignment":     ema_align,
+                "ema9":              round(e9, 2),
+                "ema20":             round(e20, 2),
+                "ema50":             round(e50, 2),
+                "ema_cross_up":      ema_cross_up,
+                "ema_cross_down":    ema_cross_down,
+                "support":           round(support, 2),
+                "resistance":        round(resistance, 2),
+                "support2":          round(support2, 2),
+                "resistance2":       round(resistance2, 2),
+                "rsi":               round(rsi, 1),
+                "rsi_zone":          rsi_zone,
+                "macd_signal":       macd_sig,
+                "macd_cross_up":     macd_cross_up,
+                "macd_cross_down":   macd_cross_down,
+                "bb_position":       bb_pos,
+                "volume_ratio":      round(volume_ratio, 2),
+                "adx":               round(adx, 1),
+                "atr_pct":           round(atr_pct, 2),
+                "potential":         potential,
+                "potential_detail":  potential_detail,
+                "risk":              risk,
+                "risk_detail":       risk_detail,
+                "confidence":        conf_score,
+                "confidence_reasons": conf_reasons,
+                "signal_obj":        sig_obj,
+                "data_source":       source,
+            })
+
+        except Exception as e:
+            logger.error(
+                f"analyze_stock_info({ticker_raw}): {e}", exc_info=True)
+            result["trend_detail"] = f"Error analisis: {str(e)[:100]}"
+            result["confidence_reasons"].append(f"❌ Error: {e}")
+
+        return result
 
     def get_top_signals(self, n: int = 5) -> List[ScalpSignal]:
         """Ambil N sinyal teratas dari scan terakhir (cek disk jika memory kosong)."""

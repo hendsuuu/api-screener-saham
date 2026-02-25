@@ -186,6 +186,7 @@ class TelegramBotHandler:
         self.app.add_handler(CommandHandler("scan", self.cmd_scan))
         self.app.add_handler(CommandHandler("top", self.cmd_top))
         self.app.add_handler(CommandHandler("signal", self.cmd_signal))
+        self.app.add_handler(CommandHandler("info", self.cmd_info))
         self.app.add_handler(CommandHandler("buy", self.cmd_buy))
         self.app.add_handler(CommandHandler("waspada", self.cmd_waspada))
         self.app.add_handler(CommandHandler("sell", self.cmd_waspada))  # alias lama
@@ -371,6 +372,49 @@ Ketik /scan untuk mulai scan sekarang!
                 parse_mode=ParseMode.HTML
             )
 
+    async def cmd_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Analisis mendalam satu saham.
+        Contoh: /info BBCA
+
+        Menampilkan:
+          - Trend (bullish/bearish/sideways) + alignment EMA
+          - Area support & resistance (swing high/low + EMA)
+          - Potensi ke depan berdasarkan indikator
+          - Risiko utama yang perlu diwaspadai
+          - Confidence score beserta alasannya
+        """
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Harap sertakan kode saham.\nContoh: <code>/info BBCA</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        ticker_raw = context.args[0].upper().strip().replace(".JK", "")
+
+        await update.message.reply_text(
+            f"🔍 Menganalisis <b>{ticker_raw}</b>...\n"
+            f"⏳ Memuat data historis + hitung indikator...",
+            parse_mode=ParseMode.HTML
+        )
+
+        try:
+            loop = asyncio.get_event_loop()
+            info = await loop.run_in_executor(
+                None,
+                lambda: self.scanner.analyze_stock_info(ticker_raw)
+            )
+            msg = self.formatter.format_info(info)
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+        except Exception as e:
+            logger.error(f"cmd_info error ({ticker_raw}): {e}", exc_info=True)
+            await update.message.reply_text(
+                f"❌ Error saat analisis <b>{ticker_raw}</b>: {str(e)[:200]}",
+                parse_mode=ParseMode.HTML
+            )
+
     async def cmd_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tampilkan sinyal BUY saja (dari memory atau cache disk hari ini)."""
         buy_signals = self.scanner._get_results_with_cache(signal_type="BUY")
@@ -395,8 +439,8 @@ Ketik /scan untuk mulai scan sekarang!
             except Exception:
                 pass
 
-        msg = f"🟢 <b>SINYAL BUY AKTIF ({len(buy_signals)} saham):</b>{time_str}\n\n"
-        for s in buy_signals[:5]:
+        msg = f"🟢 <b>SINYAL BUY HARI INI ({len(buy_signals)} saham):</b>{time_str}\n\n"
+        for s in buy_signals[:10]:  # max 10 sinyal BUY
             def fmt(p): return f"Rp {int(p):,}".replace(",", ".")
             strength_icon = "💪" if s.strength == "STRONG" else "👍" if s.strength == "MODERATE" else "⚠️"
             msg += (
@@ -404,7 +448,8 @@ Ketik /scan untuk mulai scan sekarang!
                 f"   Entry: {fmt(s.entry_price)} | TP2: {fmt(s.tp2)} | SL: {fmt(s.sl)}\n\n"
             )
 
-        msg += "💡 Gunakan /signal [KODE] untuk detail lengkap"
+        msg += "💡 Gunakan /signal [KODE] untuk detail lengkap\n"
+        msg += "🔍 Gunakan /info [KODE] untuk analisis mendalam"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     async def cmd_waspada(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -433,7 +478,7 @@ Ketik /scan untuk mulai scan sekarang!
 
         msg = f"🔴 <b>SAHAM WASPADA ({len(warn_signals)} saham){time_str}:</b>\n"
         msg += "⚠️ <i>Di BEI tidak ada short-selling. Hindari posisi baru pada saham berikut:</i>\n\n"
-        for s in warn_signals[:8]:
+        for s in warn_signals[:10]:  # max 10 sinyal WASPADA
             # reasons[1] adalah alasan pertama setelah pesan peringatan header
             alasan_idx = 1 if len(s.reasons) > 1 else 0
             alasan = s.reasons[alasan_idx][:70] if s.reasons else "kondisi teknikal memburuk"

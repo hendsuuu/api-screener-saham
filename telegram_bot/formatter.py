@@ -298,6 +298,170 @@ Contoh: /signal BBCA</i>
 """.strip()
 
     @staticmethod
+    def format_info(info: dict) -> str:
+        """
+        Format hasil analyze_stock_info() menjadi pesan Telegram HTML.
+        Menampilkan: trend, EMA, S/R, potensi, risiko, confidence, dan alasan.
+        """
+        def fmt(p: float) -> str:
+            return f"Rp {int(p):,}".replace(",", ".")
+
+        ticker = info.get("ticker", "?")
+        company = info.get("company_name", ticker)[:25]
+        price = info.get("last_price", 0.0)
+        chg = info.get("change_pct", 0.0)
+        trend = info.get("trend", "UNKNOWN")
+        td = info.get("trend_detail", "-")
+        e9 = info.get("ema9", 0.0)
+        e20 = info.get("ema20", 0.0)
+        e50 = info.get("ema50", 0.0)
+        sup = info.get("support", 0.0)
+        res = info.get("resistance", 0.0)
+        sup2 = info.get("support2", 0.0)
+        res2 = info.get("resistance2", 0.0)
+        rsi = info.get("rsi", 50.0)
+        rsi_z = info.get("rsi_zone", "-")
+        macd_s = info.get("macd_signal", "-")
+        bb_p = info.get("bb_position", "-")
+        vol_r = info.get("volume_ratio", 1.0)
+        adx = info.get("adx", 0.0)
+        atr_pct = info.get("atr_pct", 0.0)
+        potential = info.get("potential", "NETRAL")
+        pot_detail = info.get("potential_detail", [])
+        risk = info.get("risk", "SEDANG")
+        risk_detail = info.get("risk_detail", [])
+        conf = info.get("confidence", 0)
+        conf_r = info.get("confidence_reasons", [])
+        cross_up = info.get("ema_cross_up", False)
+        cross_dn = info.get("ema_cross_down", False)
+        mcross_up = info.get("macd_cross_up", False)
+        mcross_dn = info.get("macd_cross_down", False)
+        source = info.get("data_source", "")
+
+        from datetime import datetime
+        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+        # Trend icon
+        trend_icon = {
+            "BULLISH":       "📈 BULLISH",
+            "UPTREND_WEAK":  "↗️ UPTREND LEMAH",
+            "BEARISH":       "📉 BEARISH",
+            "DOWNTREND_WEAK": "↘️ DOWNTREND LEMAH",
+            "SIDEWAYS":      "↔️ SIDEWAYS",
+        }.get(trend, f"❓ {trend}")
+
+        chg_icon = "🔺" if chg >= 0 else "🔻"
+        macd_icon = "🟢" if macd_s == "BULLISH" else "🔴"
+        rsi_icon = "🔴" if rsi > 70 else ("🟢" if rsi < 35 else "🟡")
+        vol_icon = "🔥" if vol_r >= 1.5 else ("✅" if vol_r >= 1.0 else "⚠️")
+        adx_icon = "✅" if adx >= 25 else ("⚠️" if adx < 18 else "🟡")
+
+        conf_bar = "█" * (conf // 10) + "░" * (10 - conf // 10)
+
+        # Potential & risk colors
+        pot_icon = {
+            "BULLISH":              "🟢",
+            "POTENSI REVERSAL NAIK": "⚡",
+            "BEARISH":              "🔴",
+            "SIDEWAYS / WAIT":      "↔️",
+        }.get(potential, "❓")
+
+        risk_icon = {"RENDAH-SEDANG": "🟢",
+                     "SEDANG": "🟡", "TINGGI": "🔴"}.get(risk, "🟡")
+
+        msg = (
+            f"🔍 <b>INFO SAHAM: {ticker}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏷 <b>{ticker}</b> | {company}\n"
+            f"⏰ {now} WIB\n\n"
+
+            f"💰 <b>HARGA</b>\n"
+            f"💲 Terakhir : {fmt(price)}\n"
+            f"{chg_icon} Perubahan : {chg:+.2f}%\n\n"
+
+            f"📊 <b>TREND & EMA</b>\n"
+            f"🎯 Trend : <b>{trend_icon}</b>\n"
+            f"ℹ️ Detail : {td}\n"
+            f"📐 EMA9  : {fmt(e9)}\n"
+            f"📐 EMA20 : {fmt(e20)}\n"
+            f"📐 EMA50 : {fmt(e50)}\n"
+        )
+
+        if cross_up:
+            msg += "⚡ <b>EMA9 baru cross UP EMA20!</b> (sinyal bullish)\n"
+        if cross_dn:
+            msg += "⚠️ <b>EMA9 baru cross DOWN EMA20!</b> (sinyal bearish)\n"
+
+        msg += (
+            f"\n🗺 <b>SUPPORT & RESISTANCE</b>\n"
+            f"🔴 Resistance 1: {fmt(res)} (+{(res-price)/price*100:.1f}%)\n"
+            f"🔴 Resistance 2: {fmt(res2)} (+{(res2-price)/price*100:.1f}%)\n"
+            f"🟢 Support 1   : {fmt(sup)} (-{(price-sup)/price*100:.1f}%)\n"
+            f"🟢 Support 2   : {fmt(sup2)} (-{(price-sup2)/price*100:.1f}%)\n\n"
+
+            f"🔬 <b>INDIKATOR</b>\n"
+            f"{rsi_icon} RSI(9)   : {rsi:.1f} — {rsi_z}\n"
+            f"{macd_icon} MACD     : {macd_s}"
+        )
+
+        if mcross_up:
+            msg += " ⚡ fresh bullish cross"
+        if mcross_dn:
+            msg += " ⚠️ fresh bearish cross"
+        msg += f"\n"
+
+        msg += (
+            f"📈 Bollinger : {bb_p}\n"
+            f"{vol_icon} Volume   : {vol_r:.1f}x rata-rata\n"
+            f"{adx_icon} ADX      : {adx:.0f} ({'Tren Kuat' if adx >= 25 else 'Sideways' if adx < 18 else 'Moderat'})\n"
+            f"〰️ ATR/Hrg  : {atr_pct:.1f}% (fluktuasi wajar per candle)\n\n"
+
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{pot_icon} <b>POTENSI KE DEPAN: {potential}</b>\n"
+        )
+        for pd_line in pot_detail:
+            msg += f"  {pd_line}\n"
+
+        msg += (
+            f"\n{risk_icon} <b>RISIKO: {risk}</b>\n"
+        )
+        for rd_line in risk_detail[:4]:
+            msg += f"  {rd_line}\n"
+
+        msg += (
+            f"\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 <b>CONFIDENCE: {conf}/100</b>\n"
+            f"<code>[{conf_bar}]</code>\n"
+        )
+
+        if conf < 50:
+            msg += "⚠️ <i>Confidence rendah — kenapa?</i>\n"
+        for reason in conf_r[:6]:
+            msg += f"  {reason}\n"
+
+        # Lampirkan ScalpSignal jika ada
+        sig = info.get("signal_obj")
+        if sig:
+            sig_icon = "🟢 BUY" if sig.signal_type == "BUY" else "🔴 WASPADA"
+            msg += (
+                f"\n━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚡ <b>SINYAL AKTIF: {sig_icon}</b> (Skor {sig.signal_score}/100)\n"
+                f"Gunakan /signal {ticker} untuk detail entry/TP/SL lengkap\n"
+            )
+        else:
+            msg += (
+                f"\nℹ️ Tidak ada sinyal aktif saat ini (confidence < threshold)\n"
+            )
+
+        msg += (
+            f"\n⚠️ <i>Analisis ini bukan rekomendasi investasi.\n"
+            f"Selalu gunakan manajemen risiko!</i>\n"
+            f"#IDXSaham #{ticker}"
+        )
+
+        return msg.strip()
+
+    @staticmethod
     def format_help() -> str:
         """Pesan bantuan command bot."""
         return """
@@ -311,8 +475,10 @@ Contoh: /signal BBCA</i>
 /top          — 5 sinyal BUY terbaik dari scan terakhir
 /signal [KD]  — Analisis detail satu saham
                Contoh: <code>/signal BBCA</code>
-/buy          — Daftar sinyal BUY yang aktif
-/waspada      — Daftar saham kondisi WASPADA
+/info [KD]    — Ringkasan mendalam: trend, S/R, potensi, risiko
+               Contoh: <code>/info BBCA</code>
+/buy          — Daftar sinyal BUY hari ini (max 10)
+/waspada      — Daftar saham kondisi WASPADA hari ini (max 10)
 /market       — Status pasar BEI & ringkasan scan
 /help         — Tampilkan bantuan ini
 
@@ -331,13 +497,12 @@ Contoh: /signal BBCA</i>
 • <b>Di BEI tidak ada short-selling</b>, tidak ada TP/SL
 
 ━━━━━━━━━━━━━━━━━━━━
-<b>⚙️ STRATEGI SCALPING:</b>
-• Timeframe utama    : 5 menit
-• Target profit      : 2-3% per trade
-• Gunakan TP parsial : jual sebagian di TP1, sisanya di TP2
-• Geser SL ke BEP   : setelah harga capai TP1
-• Volume tinggi      : konfirmasi sinyal lebih kuat
-• Scan otomatis      : setiap 15 menit saat bursa buka
+<b>⚙️ JADWAL PENGIRIMAN SINYAL:</b>
+• 04:00 WIB — Update data candle terbaru (otomatis)
+• 06:00 WIB — Kirim max 10 BUY + 10 WASPADA (otomatis)
+• 09:00 WIB — Notif pasar buka
+• 14:45 WIB — Reminder pre-close
+• 15:05 WIB — Notif pasar tutup
 
 <b>📊 INDIKATOR YANG DIGUNAKAN:</b>
 RSI(9) • MACD(12/26/9) • Bollinger Bands • VWAP

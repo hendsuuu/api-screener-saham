@@ -64,33 +64,54 @@ class PreScreenResult:
 @dataclass
 class ScreenerCriteria:
     """
-    Semua threshold bisa di-override saat inisialisasi
-    atau diisi dari settings konfigurasi.
+    Kriteria pre-screening berorientasi profit untuk scalping IDX.
+
+    Filosofi:
+      - Harga 100–10.000: sweet-spot scalping IDX  tick lebih kecil,
+        spread lebih wajar, volatilitas harian yang bisa dikelola.
+      - Nilai transaksi Rp 5 M/hari: uang nyata beredar, bukan saham sepi.
+      - Volume surge 15 %: tanda ada katalis atau smart-money masuk,
+        cukup sensitif tanpa terlalu banyak noise.
+      - Price change 0.5 %: tangkap pre-breakout & early-momentum SEBELUM
+        saham sudah naik jauh  entry lebih baik, reward lebih besar.
     """
+    # ── Rentang harga (IDX sweet-spot scalping) ──
     min_price: float = 100.0
-    """Harga penutupan minimum (Rp). Menghindari saham gorengan / sub-gocap."""
+    """Harga minimum Rp 100 — hindari penny-stock & saham sub-gocap."""
 
-    min_volume_ma5: float = 10_000_000.0
-    """Volume rata-rata 5 hari > 10 juta lembar/hari.
-    Menjamin tersedia counterpart transaksi untuk scalping."""
+    max_price: Optional[float] = 10_000.0
+    """Harga maksimum Rp 10.000 — hindari saham ultra-high-price dengan
+    spread absolut besar yang memakan profit scalping."""
 
-    min_value_ma5: float = 10_000_000_000.0
-    """Nilai transaksi rata-rata 5 hari >= Rp 10 miliar/hari.
-    Mengukur 'uang yang beredar' nyata, bukan sekedar banyak lot-nya."""
+    # ── Likuiditas (pastikan bisa masuk & keluar cepat) ──
+    min_volume_ma5: float = 3_000_000.0
+    """Volume rata-rata 5 hari >= 3 juta lembar/hari.
+    Lebih rendah dari versi lama agar saham mid-cap yang liquid masuk."""
 
-    min_price_change_pct: float = 2.0
-    """|Perubahan harga 1 hari| >= 2 %. Filter ini menangkap MOVER hari ini.
-    Pakai nilai absolut agar saham turun pun bisa jadi kandidat SELL.
-    Saran: turunkan ke 1.5 % jika ingin pre-breakout ikut terdeteksi."""
+    min_value_ma5: float = 5_000_000_000.0
+    """Nilai transaksi rata-rata 5 hari >= Rp 5 miliar/hari.
+    Filter utama likuiditas — uang yang benar-benar berputar."""
 
-    min_vol_surge_pct: float = 30.0
-    """Volume hari ini lebih tinggi >= 30 % dari rata-rata MA5.
-    vol_surge_ratio >= 1.30. Menandakan unusual activity / katalis."""
+    # ── Momentum (tangkap pergerakan awal) ──
+    min_price_change_pct: float = 0.5
+    """|Perubahan harga 1 hari| >= 0.5 %.
+    Rendah agar pre-breakout & early-mover tertangkap.
+    Pakai nilai absolut  saham turun pun bisa jadi kandidat WASPADA."""
 
-    max_price: Optional[float] = None
-    """Opsional: batas harga atas. Berguna untuk mengecualikan saham
-    ultra-high-price yang meski liquid tapi spread absolut-nya besar.
-    Set None untuk menonaktifkan."""
+    min_vol_surge_pct: float = 15.0
+    """Volume hari ini >= 15 % di atas rata-rata MA5 (ratio >= 1.15).
+    Menandakan ada aktivitas tidak biasa / akumulasi diam-diam."""
+
+    # ── EMA cross filter (konfirmasi trend intraday) ──
+    require_ema_alignment: bool = False
+    """Jika True: hanya lolos jika EMA9 > EMA20 (uptrend) ATAU
+    EMA9 < EMA20 (downtrend). Filter ini diaktifkan di StockScanner,
+    bukan di DynamicPreScreener (karena perlu data intraday)."""
+
+    # ── ADX minimum (pastikan ada tren, bukan sideways) ──
+    min_adx: float = 18.0
+    """ADX >= 18 menunjukkan ada tren yang cukup kuat.
+    Digunakan di SignalGenerator, bukan pre-screener."""
 
 
 # ─────────────────────────────────────────────────────────────

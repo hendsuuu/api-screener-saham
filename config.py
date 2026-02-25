@@ -27,24 +27,23 @@ class Settings:
     # ─── Pre-screen Criteria (Dynamic Screener) ───
     # Harga minimum saham (Rp) — filter sub-gocap / penny stock
     PRESCREEN_MIN_PRICE: float = float(os.getenv("PRESCREEN_MIN_PRICE", "100"))
-    # Volume MA5 minimum (lembar/hari)
+    # Volume MA5 minimum (lembar/hari) — 3 juta = liquid untuk scalping
     PRESCREEN_MIN_VOLUME_MA5: float = float(
-        os.getenv("PRESCREEN_MIN_VOLUME_MA5", "10000000"))
-    # Nilai transaksi MA5 minimum (Rp/hari) — default 10 miliar
+        os.getenv("PRESCREEN_MIN_VOLUME_MA5", "3000000"))
+    # Nilai transaksi MA5 minimum (Rp/hari) — Rp 5 miliar
     PRESCREEN_MIN_VALUE_MA5: float = float(
-        os.getenv("PRESCREEN_MIN_VALUE_MA5", "10000000000"))
-    # Minimum |perubahan harga 1 hari| (%)
-    # Pakai nilai absolut agar saham turun pun terdeteksi untuk sinyal SELL.
-    # Turunkan ke 1.5 jika ingin menangkap pre-breakout lebih awal.
+        os.getenv("PRESCREEN_MIN_VALUE_MA5", "5000000000"))
+    # Minimum |perubahan harga 1 hari| (%) — 0.5% untuk tangkap pre-breakout
     PRESCREEN_MIN_PRICE_CHANGE_PCT: float = float(
-        os.getenv("PRESCREEN_MIN_PRICE_CHANGE_PCT", "2.0")
+        os.getenv("PRESCREEN_MIN_PRICE_CHANGE_PCT", "0.5")
     )
-    # Volume hari ini vs MA5 harus naik minimal X% (default 30%)
+    # Volume hari ini vs MA5 harus naik minimal X% (default 15%)
     PRESCREEN_MIN_VOL_SURGE_PCT: float = float(
-        os.getenv("PRESCREEN_MIN_VOL_SURGE_PCT", "30.0")
+        os.getenv("PRESCREEN_MIN_VOL_SURGE_PCT", "15.0")
     )
-    # Harga maksimum (opsional, 0 = nonaktif)
-    PRESCREEN_MAX_PRICE: float = float(os.getenv("PRESCREEN_MAX_PRICE", "0"))
+    # Harga maksimum Rp 10.000 — avoid ultra-high-price stocks
+    PRESCREEN_MAX_PRICE: float = float(
+        os.getenv("PRESCREEN_MAX_PRICE", "10000"))
 
     # ─── Scalping Parameters ──────────────────
     TP1_PCT: float = float(os.getenv("TP1_PCT", "1.5"))
@@ -53,10 +52,14 @@ class Settings:
     SL_PCT: float = float(os.getenv("SL_PCT", "1.0"))
     MIN_RR_RATIO: float = float(os.getenv("MIN_RR_RATIO", "2.0"))
 
+    # ─── Limit Sinyal Harian ──────────────────
+    MAX_BUY_SIGNALS: int = int(os.getenv("MAX_BUY_SIGNALS", "10"))
+    MAX_WASPADA_SIGNALS: int = int(os.getenv("MAX_WASPADA_SIGNALS", "10"))
+
     # ─── API ──────────────────────────────────
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "changeme-secret-key")
+    API_SECRET_KEY: str = os.getenv("API_SECRET_KEY")
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     # ─── Workers ──────────────────────────────
@@ -99,6 +102,8 @@ class Settings:
             min_price_change_pct=self.PRESCREEN_MIN_PRICE_CHANGE_PCT,
             min_vol_surge_pct=self.PRESCREEN_MIN_VOL_SURGE_PCT,
             max_price=self.PRESCREEN_MAX_PRICE if self.PRESCREEN_MAX_PRICE > 0 else None,
+            require_ema_alignment=False,  # aktifkan via .env jika ingin lebih ketat
+            min_adx=float(os.getenv("PRESCREEN_MIN_ADX", "18.0")),
         )
 
     def validate(self):
