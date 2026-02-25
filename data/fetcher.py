@@ -13,6 +13,14 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Senyapkan log 'Failed to get ticker' bawaan yfinance
+# agar tidak memenuhi output (error tetap ditangkap di level kita)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("yfinance.base").setLevel(logging.CRITICAL)
+logging.getLogger("yfinance.utils").setLevel(logging.CRITICAL)
+logging.getLogger("peewee").setLevel(logging.CRITICAL)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 
 class StockDataFetcher:
     """
@@ -55,27 +63,47 @@ class StockDataFetcher:
         if use_cache and self._is_cache_valid(cache_key):
             return self.session_cache[cache_key]
 
-        try:
-            stock = yf.Ticker(ticker)
-            df = stock.history(period=period, interval=interval)
+        # Retry hingga 3 kali dengan jeda eksponensial
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                stock = yf.Ticker(ticker)
+                df = stock.history(period=period, interval=interval)
 
-            if df.empty:
-                logger.warning(f"Tidak ada data untuk {ticker}")
-                return None
+                if df is None or df.empty:
+                    # Coba fallback period lebih panjang agar indikator bisa dihitung
+                    if attempt == 1 and period == "5d":
+                        df = stock.history(period="1mo", interval=interval)
+                    if df is None or df.empty:
+                        logger.debug(
+                            f"Tidak ada data untuk {ticker} (attempt {attempt})")
+                        if attempt < 3:
+                            time.sleep(1.0 * attempt)
+                            continue
+                        return None
 
-            # Bersihkan data
-            df = df.dropna()
-            df.index = pd.to_datetime(df.index)
+                # Bersihkan data
+                df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                df.index = pd.to_datetime(df.index)
 
-            # Simpan ke cache
-            self.session_cache[cache_key] = df
-            self.cache_time[cache_key] = datetime.now()
+                if df.empty:
+                    logger.debug(f"Data {ticker} kosong setelah dropna")
+                    return None
 
-            return df
+                # Simpan ke cache
+                self.session_cache[cache_key] = df
+                self.cache_time[cache_key] = datetime.now()
+                return df
 
-        except Exception as e:
-            logger.error(f"Error mengambil data {ticker}: {e}")
-            return None
+            except Exception as e:
+                last_error = e
+                logger.debug(f"Attempt {attempt}/3 gagal untuk {ticker}: {e}")
+                if attempt < 3:
+                    time.sleep(1.5 * attempt)
+
+        logger.warning(
+            f"Gagal ambil data {ticker} setelah 3 percobaan: {last_error}")
+        return None
 
     def get_daily_data(
         self,
@@ -91,19 +119,28 @@ class StockDataFetcher:
             period: Periode (1mo, 3mo, 6mo, 1y)
             interval: Interval (1d, 1wk)
         """
-        try:
-            stock = yf.Ticker(ticker)
-            df = stock.history(period=period, interval=interval)
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 3):
+            try:
+                stock = yf.Ticker(ticker)
+                df = stock.history(period=period, interval=interval)
 
-            if df.empty:
-                return None
+                if df is None or df.empty:
+                    if attempt < 2:
+                        time.sleep(1.0)
+                        continue
+                    return None
 
-            df = df.dropna()
-            return df
+                df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                return df if not df.empty else None
 
-        except Exception as e:
-            logger.error(f"Error data harian {ticker}: {e}")
-            return None
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(1.5)
+
+        logger.debug(f"Error data harian {ticker}: {last_error}")
+        return None
 
     def get_current_price(self, ticker: str) -> Optional[Dict]:
         """

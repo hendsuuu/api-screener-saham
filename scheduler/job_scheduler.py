@@ -52,37 +52,24 @@ class ScanScheduler:
     def setup_jobs(self):
         """Daftarkan semua jobs ke scheduler."""
 
-        # ╔══════════════════════════════════════╗
-        # ║  SCAN OTOMATIS (setiap N menit)      ║
-        # ╚══════════════════════════════════════╝
-        # Sesi 1: 09:05 - 11:25
+        # ╔══════════════════════════════════════════════════════╗
+        # ║  SCAN OTOMATIS SETIAP 15 MENIT (jam bursa BEI)      ║
+        # ║  Trigger aktif jam 09–14, menit ke-5/20/35/50       ║
+        # ║  → Dalam job, is_market_open() menyaring waktu di   ║
+        # ║    luar sesi (istirahat siang & setelah close)       ║
+        # ╚══════════════════════════════════════════════════════╝
         self.scheduler.add_job(
             self._job_scan_and_notify,
             trigger=CronTrigger(
                 day_of_week="mon-fri",
-                hour="9-11",
-                minute=f"5,{5 + self.scan_interval},{5 + 2*self.scan_interval},{5 + 3*self.scan_interval}",
-                timezone=WIB
+                hour="9-14",          # mencakup sesi 1 dan sesi 2
+                minute="5,20,35,50",  # tepat setiap 15 menit mulai menit ke-5
+                timezone=WIB,
             ),
-            id="scan_sesi1",
-            name="Scan Sesi 1",
-            max_instances=1,
-            misfire_grace_time=60
-        )
-
-        # Sesi 2: 13:35 - 14:45
-        self.scheduler.add_job(
-            self._job_scan_and_notify,
-            trigger=CronTrigger(
-                day_of_week="mon-fri",
-                hour="13,14",
-                minute=f"35,50",
-                timezone=WIB
-            ),
-            id="scan_sesi2",
-            name="Scan Sesi 2",
-            max_instances=1,
-            misfire_grace_time=60
+            id="scan_15min",
+            name=f"Scan Otomatis 15 Menit",
+            max_instances=1,          # cegah tumpang tindih jika scan lebih lama dari 15 menit
+            misfire_grace_time=120,   # toleransi 2 menit jika ada keterlambatan
         )
 
         # ╔══════════════════════════════════════╗
@@ -150,10 +137,15 @@ class ScanScheduler:
             await notifier.send_summary(signals, market)
             await asyncio.sleep(2)
 
-            # Kirim top 3 sinyal detail
-            top3 = signals[:3]
-            sent = await notifier.send_signals_batch(top3, max_signals=3)
-            logger.info(f"[SCHEDULER] {sent} sinyal dikirim ke Telegram")
+            # Kirim top 3 sinyal BUY detail saja (WASPADA sudah ada di summary)
+            top_buy = [s for s in signals if s.signal_type == "BUY"][:3]
+            if top_buy:
+                sent = await notifier.send_signals_batch(top_buy, max_signals=3)
+                logger.info(f"[SCHEDULER] {sent} sinyal BUY dikirim ke Telegram")
+
+            warn_count = sum(1 for s in signals if s.signal_type == "WASPADA")
+            if warn_count:
+                logger.info(f"[SCHEDULER] {warn_count} sinyal WASPADA disertakan dalam summary")
 
         except Exception as e:
             logger.error(f"[SCHEDULER] Error job scan: {e}", exc_info=True)
@@ -169,8 +161,10 @@ class ScanScheduler:
             await notifier.send_message(
                 f"🟢 <b>PASAR BEI DIBUKA!</b>\n"
                 f"📅 {now}\n"
-                f"⏰ 09:00 WIB - Sesi 1 dimulai\n\n"
-                f"📊 Screener aktif setiap 15 menit\n"
+                f"⏰ 09:00 WIB — Sesi 1 dimulai\n\n"
+                f"🔄 Scan otomatis setiap <b>15 menit</b>\n"
+                f"🟢 Sinyal BUY dilengkapi Entry / TP / SL\n"
+                f"🔴 Sinyal WASPADA — kondisi bearish, hindari beli\n\n"
                 f"💡 Gunakan /scan untuk sinyal terkini"
             )
         except Exception as e:

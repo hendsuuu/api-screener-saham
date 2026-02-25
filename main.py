@@ -17,7 +17,8 @@ from pydantic import BaseModel
 
 from config import settings
 from data.fetcher import StockDataFetcher
-from data.stock_list import SCALPING_WATCHLIST, get_yahoo_symbol
+from data.stock_list import IDX_UNIVERSE, get_yahoo_symbol
+from data.dynamic_screener import ScreenerCriteria
 from screener.scanner import StockScanner
 from screener.signal_generator import ScalpSignal
 from scheduler.job_scheduler import ScanScheduler
@@ -34,7 +35,10 @@ logger = logging.getLogger(__name__)
 
 # ─── Global instances ────────────────────────
 fetcher = StockDataFetcher()
-scanner = StockScanner(max_workers=settings.MAX_SCAN_WORKERS)
+scanner = StockScanner(
+    max_workers=settings.MAX_SCAN_WORKERS,
+    criteria=settings.build_screener_criteria(),
+)
 notifier = TelegramNotifier(
     settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_IDS)
 formatter = TelegramFormatter()
@@ -97,7 +101,7 @@ app = FastAPI(
 Sistem screener saham IDX/BEI dengan strategi **scalping intraday** yang mencari peluang profit **2-3%**.
 
 ### Fitur:
-- Scan otomatis 35+ saham LQ45/IDX30
+- Pre-screen dinamis ~400 saham IDX berdasarkan kriteria volume/momentum
 - Sinyal BUY/SELL dengan Entry, TP1/TP2/TP3, SL
 - Analisis multi-indikator (RSI, MACD, Bollinger, VWAP, ADX, SuperTrend)
 - Notifikasi otomatis ke Telegram (grup/pribadi)
@@ -182,6 +186,17 @@ class ScanRequest(BaseModel):
     min_volume_ratio: float = 1.2
     signal_filter: Optional[str] = None  # "BUY", "SELL", None
     send_telegram: bool = False
+    skip_prescreen: bool = False  # True = scan seluruh IDX_UNIVERSE langsung
+
+
+class UpdateCriteriaRequest(BaseModel):
+    """Hot-reload kriteria pre-screener tanpa restart server."""
+    min_price: Optional[float] = None
+    min_volume_ma5: Optional[float] = None
+    min_value_ma5: Optional[float] = None
+    min_price_change_pct: Optional[float] = None
+    min_vol_surge_pct: Optional[float] = None
+    max_price: Optional[float] = None
 
 
 class MarketStatusResponse(BaseModel):
@@ -250,8 +265,19 @@ async def root():
             "top_signals": "GET /signals/top",
             "market_status": "GET /market",
             "watchlist": "GET /watchlist",
+            "prescreen_run": "POST /prescreen/run",
+            "prescreen_results": "GET /prescreen/results",
+            "prescreen_criteria": "PATCH /prescreen/criteria",
             "scheduler_jobs": "GET /scheduler/jobs",
             "manual_trigger": "POST /scheduler/trigger",
+        },
+        "universe_size": len(IDX_UNIVERSE),
+        "prescreen_criteria": {
+            "min_price": scanner.pre_screener.criteria.min_price,
+            "min_volume_ma5": scanner.pre_screener.criteria.min_volume_ma5,
+            "min_value_ma5": scanner.pre_screener.criteria.min_value_ma5,
+            "min_price_change_pct": scanner.pre_screener.criteria.min_price_change_pct,
+            "min_vol_surge_pct": scanner.pre_screener.criteria.min_vol_surge_pct,
         }
     }
 
@@ -264,11 +290,20 @@ async def get_market_status():
 
 @app.get("/watchlist", tags=["Market"])
 async def get_watchlist():
-    """Daftar saham dalam watchlist screener."""
+    """Universe IDX yang akan di-pre-screen."""
+    c = scanner.pre_screener.criteria
     return {
-        "total": len(SCALPING_WATCHLIST),
-        "tickers": SCALPING_WATCHLIST,
-        "description": "Saham-saham LQ45/IDX30 pilihan untuk scalping"
+        "total_universe": len(IDX_UNIVERSE),
+        "tickers": IDX_UNIVERSE,
+        "prescreen_criteria": {
+            "min_price": c.min_price,
+            "min_volume_ma5": c.min_volume_ma5,
+            "min_value_ma5": c.min_value_ma5,
+            "min_price_change_pct": c.min_price_change_pct,
+            "min_vol_surge_pct": c.min_vol_surge_pct,
+            "max_price": c.max_price,
+        },
+        "description": "Pre-screen dinamis seluruh saham IDX berdasarkan kriteria volume/momentum"
     }
 
 
@@ -290,7 +325,8 @@ async def run_scan(
         signals = await scanner.scan_all_async(
             watchlist=req.tickers,
             min_score=req.min_score,
-            signal_filter=req.signal_filter
+            signal_filter=req.signal_filter,
+            skip_prescreen=req.skip_prescreen,
         )
 
         if req.send_telegram and signals:
@@ -441,6 +477,106 @@ async def _manual_trigger_scan():
             await notifier.send_signals_batch(signals, max_signals=settings.MAX_SIGNALS_PER_SCAN)
     except Exception as e:
         logger.error(f"Error manual trigger: {e}", exc_info=True)
+
+
+# ════════════════════════════════════════════════
+# PRE-SCREEN ENDPOINTS
+# ════════════════════════════════════════════════
+
+@app.post("/prescreen/run", tags=["Pre-Screen"])
+async def run_prescreen(
+    verbose: bool = False,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    Jalankan pre-screener terhadap seluruh IDX_UNIVERSE.
+
+    Mengembalikan daftar kandidat yang lolos kriteria + ringkasan top movers.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        candidates = await loop.run_in_executor(
+            None, lambda: scanner.pre_screener.run(verbose=verbose)
+        )
+        summary = scanner.last_prescreen_summary or scanner.pre_screener.summary()
+        return {
+            "total_universe": len(IDX_UNIVERSE),
+            "total_candidates": len(candidates),
+            "candidates": candidates,
+            "summary": summary,
+            "criteria": {
+                "min_price": scanner.pre_screener.criteria.min_price,
+                "min_volume_ma5": scanner.pre_screener.criteria.min_volume_ma5,
+                "min_value_ma5": scanner.pre_screener.criteria.min_value_ma5,
+                "min_price_change_pct": scanner.pre_screener.criteria.min_price_change_pct,
+                "min_vol_surge_pct": scanner.pre_screener.criteria.min_vol_surge_pct,
+                "max_price": scanner.pre_screener.criteria.max_price,
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error prescreen: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/prescreen/results", tags=["Pre-Screen"])
+async def get_prescreen_results(_: bool = Depends(verify_api_key)):
+    """
+    Hasil pre-screen terakhir (detail semua saham: lolos & ditolak).
+
+    Cache berlaku 5 menit. Jalankan POST /prescreen/run untuk memperbarui.
+    """
+    raw = scanner.pre_screener.last_results
+    if not raw:
+        return {
+            "message": "Belum ada hasil pre-screen. Jalankan POST /prescreen/run terlebih dahulu.",
+            "passed": [],
+            "failed": []
+        }
+    passed = [r.__dict__ for r in raw if r.passed]
+    failed = [r.__dict__ for r in raw if not r.passed]
+    return {
+        "total": len(raw),
+        "passed": len(passed),
+        "failed": len(failed),
+        "passed_list": passed,
+        "failed_list": failed,
+    }
+
+
+@app.patch("/prescreen/criteria", tags=["Pre-Screen"])
+async def update_prescreen_criteria(
+    req: UpdateCriteriaRequest,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    Hot-reload kriteria pre-screener tanpa restart server.
+
+    Hanya field yang dikirim yang akan diperbarui.
+    Cache otomatis dihapus setelah update.
+    """
+    current = scanner.pre_screener.criteria
+    new_criteria = ScreenerCriteria(
+        min_price=req.min_price if req.min_price is not None else current.min_price,
+        min_volume_ma5=req.min_volume_ma5 if req.min_volume_ma5 is not None else current.min_volume_ma5,
+        min_value_ma5=req.min_value_ma5 if req.min_value_ma5 is not None else current.min_value_ma5,
+        min_price_change_pct=req.min_price_change_pct if req.min_price_change_pct is not None else current.min_price_change_pct,
+        min_vol_surge_pct=req.min_vol_surge_pct if req.min_vol_surge_pct is not None else current.min_vol_surge_pct,
+        max_price=req.max_price if req.max_price is not None else current.max_price,
+    )
+    scanner.update_criteria(new_criteria)
+    logger.info(f"Pre-screen criteria updated: {new_criteria}")
+    return {
+        "status": "updated",
+        "message": "Kriteria diperbarui. Cache dihapus, pre-screen berikutnya menggunakan kriteria baru.",
+        "new_criteria": {
+            "min_price": new_criteria.min_price,
+            "min_volume_ma5": new_criteria.min_volume_ma5,
+            "min_value_ma5": new_criteria.min_value_ma5,
+            "min_price_change_pct": new_criteria.min_price_change_pct,
+            "min_vol_surge_pct": new_criteria.min_vol_surge_pct,
+            "max_price": new_criteria.max_price,
+        }
+    }
 
 
 # ════════════════════════════════════════════════

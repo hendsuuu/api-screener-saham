@@ -1,75 +1,62 @@
 """
 Stock Scanner - Runner utama screener saham
-Melakukan scan semua saham dalam watchlist dan menghasilkan sinyal
+
+Alur dua tahap:
+  Tahap 1 — Pre-screen (DynamicPreScreener):
+    Unduh data harian seluruh IDX_UNIVERSE (~400 saham) secara batch,
+    kemudian filter berdasarkan kriteria likuiditas & momentum:
+      • Harga penutupan >= min_price
+      • Volume MA5 > min_volume_ma5
+      • Nilai transaksi MA5 >= min_value_ma5
+      • |Perubahan harga 1 hari| >= min_price_change_pct
+      • Volume hari ini / Volume MA5 >= 1 + vol_surge_pct
+    Hasil: 20–60 kandidat aktif.
+
+  Tahap 2 — Full technical scan (StockScanner):
+    Unduh data intraday 5-menit hanya untuk kandidat,
+    hitung semua indikator, dan generate sinyal BUY/SELL
+    lengkap dengan Entry, TP1/TP2/TP3, SL, dan scoring.
 """
 
 import asyncio
 import logging
 import time
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from data.fetcher import StockDataFetcher
-from data.stock_list import SCALPING_WATCHLIST, get_yahoo_symbol
+from data.stock_list import (
+    IDX_UNIVERSE, SCREENER_WATCHLIST,
+    COMPANY_NAMES, get_yahoo_symbol,
+)
+from data.dynamic_screener import DynamicPreScreener, ScreenerCriteria
 from screener.signal_generator import SignalGenerator, ScalpSignal
 
 logger = logging.getLogger(__name__)
 
 
-# Mapping nama perusahaan
-COMPANY_NAMES = {
-    "BBCA": "Bank Central Asia",
-    "BBRI": "Bank Rakyat Indonesia",
-    "BMRI": "Bank Mandiri",
-    "BBNI": "Bank Negara Indonesia",
-    "TLKM": "Telkom Indonesia",
-    "ASII": "Astra International",
-    "UNTR": "United Tractors",
-    "ADRO": "Adaro Energy",
-    "ANTM": "Aneka Tambang",
-    "PTBA": "Bukit Asam",
-    "ITMG": "Indo Tambangraya Megah",
-    "INCO": "Vale Indonesia",
-    "MDKA": "Merdeka Copper Gold",
-    "GOTO": "GoTo Gojek Tokopedia",
-    "BUKA": "Bukalapak",
-    "EMTK": "Elang Mahkota Teknologi",
-    "ICBP": "Indofood CBP Sukses Makmur",
-    "INDF": "Indofood Sukses Makmur",
-    "KLBF": "Kalbe Farma",
-    "UNVR": "Unilever Indonesia",
-    "SMGR": "Semen Indonesia",
-    "INTP": "Indocement Tunggal Prakarsa",
-    "PGAS": "Perusahaan Gas Negara",
-    "INKP": "Indah Kiat Pulp & Paper",
-    "TKIM": "Tjiwi Kimia",
-    "BRPT": "Barito Pacific",
-    "BRIS": "Bank Syariah Indonesia",
-    "BBTN": "Bank Tabungan Negara",
-    "MAPI": "Mitra Adiperkasa",
-    "CPIN": "Charoen Pokphand Indonesia",
-    "HMSP": "HM Sampoerna",
-    "HRUM": "Harum Energy",
-    "BYAN": "Bayan Resources",
-    "MEDC": "Medco Energi Internasional",
-    "ESSA": "ESSA Industries",
-    "PTPP": "PP (Persero)",
-    "WIKA": "Wijaya Karya",
-}
-
-
 class StockScanner:
     """
-    Scanner otomatis yang melakukan scan keseluruhan watchlist
-    dan menghasilkan sinyal scalping terbaik.
+    Scanner dua tahap:
+      1. DynamicPreScreener  → filter universe harian (cepat, batch)
+      2. Analisis teknikal   → intraday 5-menit hanya pada kandidat
     """
 
-    def __init__(self, max_workers: int = 5):
+    def __init__(
+        self,
+        max_workers: int = 5,
+        criteria: Optional[ScreenerCriteria] = None,
+    ):
         self.fetcher = StockDataFetcher()
         self.generator = SignalGenerator()
         self.max_workers = max_workers
+        self.pre_screener = DynamicPreScreener(
+            criteria=criteria,
+            universe=IDX_UNIVERSE,
+        )
         self.last_scan_results: List[ScalpSignal] = []
         self.last_scan_time: Optional[str] = None
+        self.last_prescreen_summary: Optional[Dict] = None
 
     def scan_single_stock(self, ticker_raw: str) -> Optional[ScalpSignal]:
         """
@@ -124,35 +111,78 @@ class StockScanner:
         watchlist: Optional[List[str]] = None,
         min_score: int = 55,
         min_volume_ratio: float = 1.2,
-        signal_filter: Optional[str] = None  # "BUY", "SELL", atau None
+        signal_filter: Optional[str] = None,  # "BUY", "SELL", atau None
+        skip_prescreen: bool = False,
     ) -> List[ScalpSignal]:
         """
-        Scan semua saham dalam watchlist secara paralel.
+        Scan saham secara dua tahap.
+
+        Tahap 1 — Pre-screen (otomatis jika watchlist=None):
+            Filter IDX_UNIVERSE berdasarkan kriteria likuiditas & momentum.
+            Saham yang tidak memenuhi kriteria TIDAK di-scan teknikal
+            sehingga waktu proses jauh lebih efisien.
+
+        Tahap 2 — Analisis teknikal pada kandidat:
+            Intraday 5-menit → RSI, MACD, BB, VWAP, ADX, ATR → sinyal.
 
         Args:
-            watchlist: List kode saham (opsional, default: SCALPING_WATCHLIST)
-            min_score: Skor minimum sinyal yang ditampilkan (0-100)
-            min_volume_ratio: Minimum rasio volume
-            signal_filter: Filter jenis sinyal ("BUY"/"SELL"/None)
+            watchlist       : Daftar ticker manual (opsional).
+                              None  → jadikan IDX_UNIVERSE sebagai pool,
+                                      lalu jalankan pre-screener otomatis.
+            min_score       : Skor minimum sinyal yang dikembalikan (0–100).
+            min_volume_ratio: Filter tambahan rasio volume intraday.
+            signal_filter   : "BUY" / "SELL" / None.
+            skip_prescreen  : True = lewati tahap 1, langsung scan semua
+                              ticker dalam watchlist (berguna untuk debug).
 
         Returns:
-            List sinyal terurut dari skor tertinggi
+            List[ScalpSignal] terurut dari skor tertinggi.
         """
-        if watchlist is None:
-            watchlist = SCALPING_WATCHLIST
-
-        logger.info(f"Memulai scan {len(watchlist)} saham...")
         start_time = time.time()
 
-        signals = []
+        # ── Tahap 1: tentukan kandidat ───────────────────────
+        if watchlist is not None:
+            # Watchlist manual → skip pre-screener
+            candidates = watchlist
+            logger.info(
+                f"Scan manual: {len(candidates)} saham (pre-screen dilewati)"
+            )
+        elif skip_prescreen:
+            candidates = IDX_UNIVERSE
+            logger.info(
+                f"Scan tanpa pre-screen: {len(candidates)} saham (debug mode)"
+            )
+        else:
+            # DEFAULT: pre-screen IDX_UNIVERSE dulu
+            logger.info(
+                f"Tahap 1 — Pre-screen {len(IDX_UNIVERSE)} saham IDX..."
+            )
+            candidates = self.pre_screener.run(verbose=True)
+            self.last_prescreen_summary = self.pre_screener.summary()
 
-        # Scan paralel dengan ThreadPoolExecutor
+            if not candidates:
+                logger.warning(
+                    "Pre-screen tidak menghasilkan kandidat. "
+                    "Pasar mungkin tutup atau data terbatas. "
+                    "Fallback ke SCREENER_WATCHLIST."
+                )
+                candidates = SCREENER_WATCHLIST
+
+            logger.info(
+                f"Tahap 1 selesai: {len(candidates)} kandidat lolos pre-screen "
+                f"(dari {len(IDX_UNIVERSE)} saham)"
+            )
+
+        # ── Tahap 2: analisis teknikal paralel ───────────────
+        logger.info(
+            f"Tahap 2 — Analisis teknikal {len(candidates)} kandidat...")
+
+        signals: List[ScalpSignal] = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_ticker = {
                 executor.submit(self.scan_single_stock, ticker): ticker
-                for ticker in watchlist
+                for ticker in candidates
             }
-
             for future in as_completed(future_to_ticker):
                 ticker = future_to_ticker[future]
                 try:
@@ -162,30 +192,25 @@ class StockScanner:
                 except Exception as e:
                     logger.error(f"Error future {ticker}: {e}")
 
-        # Filter sinyal
-        filtered = []
-        for sig in signals:
-            if sig.signal_score < min_score:
-                continue
-            if sig.volume_ratio < min_volume_ratio:
-                continue
-            if signal_filter and sig.signal_type != signal_filter:
-                continue
-            filtered.append(sig)
-
-        # Urutkan berdasarkan skor (tertinggi dulu)
+        # ── Filter & urutkan ─────────────────────────────────
+        filtered = [
+            sig for sig in signals
+            if sig.signal_score >= min_score
+            and sig.volume_ratio >= min_volume_ratio
+            and (signal_filter is None or sig.signal_type == signal_filter)
+        ]
         filtered.sort(key=lambda x: x.signal_score, reverse=True)
 
         elapsed = time.time() - start_time
         logger.info(
-            f"Scan selesai dalam {elapsed:.1f}s | "
-            f"Total: {len(watchlist)} | Sinyal: {len(filtered)}"
+            f"Scan selesai {elapsed:.1f}s | "
+            f"Kandidat: {len(candidates)} | "
+            f"Sinyal ditemukan: {len(filtered)}"
         )
 
         self.last_scan_results = filtered
         from datetime import datetime
         self.last_scan_time = datetime.now().isoformat()
-
         return filtered
 
     def get_top_signals(self, n: int = 5) -> List[ScalpSignal]:
@@ -247,12 +272,23 @@ class StockScanner:
         self,
         watchlist: Optional[List[str]] = None,
         min_score: int = 55,
-        signal_filter: Optional[str] = None
+        signal_filter: Optional[str] = None,
+        skip_prescreen: bool = False,
     ) -> List[ScalpSignal]:
         """Versi async dari scan_all untuk digunakan di FastAPI."""
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: self.scan_all(watchlist, min_score, 1.2, signal_filter)
+            lambda: self.scan_all(
+                watchlist, min_score, 1.2, signal_filter, skip_prescreen
+            ),
         )
         return result
+
+    def update_criteria(self, criteria: ScreenerCriteria) -> None:
+        """Update kriteria pre-screener tanpa restart scanner."""
+        self.pre_screener.criteria = criteria
+        # Invalidasi cache agar filter baru langsung aktif
+        self.pre_screener._daily_cache = None
+        self.pre_screener._cache_time = None
+        logger.info(f"Kriteria pre-screener diperbarui: {criteria}")

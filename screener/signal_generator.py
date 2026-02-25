@@ -421,13 +421,16 @@ class SignalGenerator:
         company_name: str = ""
     ) -> Optional[ScalpSignal]:
         """
-        Generate sinyal SELL/SHORT untuk scalping.
+        Deteksi kondisi BEARISH dan kembalikan sinyal WASPADA.
 
-        Kondisi SELL:
-        1. Trend bearish
-        2. RSI tidak oversold (> 35)
-        3. MACD bearish
-        4. Volume tinggi konfirmasi
+        Di pasar saham Indonesia TIDAK ada mekanisme short-selling reguler,
+        sehingga sinyal ini BUKAN perintah jual/short — melainkan PERINGATAN
+        bahwa kondisi teknikal memburuk.
+
+        Berguna untuk:
+        - Menghindari beli di kondisi downtrend
+        - Mengingatkan pemegang saham untuk pertimbangkan cut-loss
+        - Early warning sebelum koreksi lebih dalam
         """
         if len(df_5m) < 50:
             return None
@@ -448,10 +451,11 @@ class SignalGenerator:
         support, resistance = self._calculate_support_resistance(df_5m)
         bb_upper, bb_mid, bb_lower = self.ind.bollinger_bands(close, 20, 2)
 
+        # Filter: jangan generate waspada jika kondisi tidak jelas bearish
         if rsi_val < 30:
-            return None
+            return None  # Sudah oversold, bukan bearish baru
         if not macd_bear and histogram.iloc[-1] > 0.5:
-            return None
+            return None  # MACD masih bullish
 
         score, reasons = self._score_signal(
             rsi_val, not macd_bear, vol_ratio, trend, candle_pattern, adx, "SELL"
@@ -460,33 +464,24 @@ class SignalGenerator:
         if score < 45:
             return None
 
-        entry = current_price
-        entry_zone_low = entry * (1 - 0.003)
-        entry_zone_high = entry * (1 + 0.002)
+        # Tambahkan peringatan konteks IDX di paling awal
+        reasons.insert(0,
+                       "⚠️ Ini SINYAL WASPADA — di BEI tidak ada short selling. "
+                       "Hindari posisi baru atau pertimbangkan kurangi eksposur."
+                       )
 
-        # Untuk SELL: TP di bawah, SL di atas
-        tp1 = round(entry * (1 - self.config["tp1_pct"] / 100), 0)
-        tp2 = round(entry * (1 - self.config["tp2_pct"] / 100), 0)
-        tp3 = round(entry * (1 - self.config["tp3_pct"] / 100), 0)
-
-        sl_atr = entry + (atr_val * self.config["sl_atr_mult"])
-        sl_pct_val = entry * (1 + self.config["sl_pct"] / 100)
-        sl = min(sl_atr, sl_pct_val, resistance * 1.002)
-
-        sl_distance = sl - entry
-        tp_distance = entry - tp2
-        rr_ratio = tp_distance / sl_distance if sl_distance > 0 else 0
-
-        if rr_ratio < self.config["min_rr"]:
-            sl = entry + (tp_distance / self.config["min_rr"])
-            rr_ratio = self.config["min_rr"]
-
-        sl_pct = ((sl - entry) / entry) * 100
         price_vs_vwap = "ABOVE" if current_price > vwap_val else "BELOW"
+        if price_vs_vwap == "BELOW":
+            reasons.append(
+                f"🔴 Harga di bawah VWAP ({vwap_val:.0f}) — tekanan jual dominan")
+
         bb_pct = (current_price - float(bb_lower.iloc[-1])) / (
             float(bb_upper.iloc[-1]) - float(bb_lower.iloc[-1]))
         bb_pos = "UPPER" if bb_pct > 0.7 else (
             "LOWER" if bb_pct < 0.3 else "MIDDLE")
+        if bb_pos == "UPPER":
+            reasons.append(
+                "🔴 Harga menyentuh upper Bollinger Band — berisiko koreksi")
 
         open_price = float(df_5m["Open"].iloc[0])
         high_day = float(df_5m["High"].max())
@@ -500,18 +495,19 @@ class SignalGenerator:
             ticker=ticker,
             ticker_clean=ticker_clean,
             company_name=company_name or ticker_clean,
-            signal_type="SELL",
+            signal_type="WASPADA",
             strength=self._get_signal_strength(score),
-            entry_price=round(entry, 0),
-            entry_zone_low=round(entry_zone_low, 0),
-            entry_zone_high=round(entry_zone_high, 0),
-            tp1=round(tp1, 0),
-            tp2=round(tp2, 0),
-            tp3=round(tp3, 0),
-            sl=round(sl, 0),
-            rr_ratio=round(rr_ratio, 2),
-            target_pct=self.config["tp2_pct"],
-            sl_pct=round(sl_pct, 2),
+            # Tidak ada entry/TP/SL untuk WASPADA
+            entry_price=round(current_price, 0),
+            entry_zone_low=0.0,
+            entry_zone_high=0.0,
+            tp1=0.0,
+            tp2=0.0,
+            tp3=0.0,
+            sl=0.0,
+            rr_ratio=0.0,
+            target_pct=0.0,
+            sl_pct=0.0,
             rsi=round(rsi_val, 1),
             macd_signal="BEARISH" if macd_bear else "NEUTRAL",
             volume_ratio=round(vol_ratio, 2),

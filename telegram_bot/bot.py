@@ -18,7 +18,7 @@ from telegram.error import TelegramError
 from screener.signal_generator import ScalpSignal
 from screener.scanner import StockScanner
 from data.fetcher import StockDataFetcher
-from data.stock_list import get_yahoo_symbol, SCALPING_WATCHLIST
+from data.stock_list import get_yahoo_symbol, IDX_UNIVERSE
 from telegram_bot.formatter import TelegramFormatter
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,8 @@ class TelegramBotHandler:
         self.app.add_handler(CommandHandler("top", self.cmd_top))
         self.app.add_handler(CommandHandler("signal", self.cmd_signal))
         self.app.add_handler(CommandHandler("buy", self.cmd_buy))
-        self.app.add_handler(CommandHandler("sell", self.cmd_sell))
+        self.app.add_handler(CommandHandler("waspada", self.cmd_waspada))
+        self.app.add_handler(CommandHandler("sell", self.cmd_waspada))  # alias lama
         self.app.add_handler(CommandHandler("market", self.cmd_market))
 
         # Handler pesan tidak dikenal
@@ -178,19 +179,28 @@ class TelegramBotHandler:
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Pesan selamat datang."""
         welcome = """
-👋 <b>Selamat datang di SAHAM SCALPER BOT!</b>
+� <b>IDX SCALPER BOT</b> 🇨🇮
+━━━━━━━━━━━━━━━━━━━━
+🤖 Bot screener saham IDX untuk strategi <b>scalping intraday</b>.
 
-🤖 Bot ini membantu Anda menemukan peluang scalping intraday
-di pasar saham Indonesia (IDX/BEI).
+<b>🟢 Sinyal BUY — Lengkap dengan:</b>
+• Entry Zone, TP1/TP2/TP3, Stop Loss
+• Risk:Reward minimum 1:2
+• Estimasi profit per lot (100 lembar)
 
-📊 <b>Fitur Utama:</b>
-• Screener otomatis 35+ saham likuid
-• Sinyal BUY/SELL dengan Entry, TP1/TP2/TP3, SL
-• Analisis multi-indikator (RSI, MACD, BB, VWAP, ADX)
-• Notifikasi otomatis setiap 15 menit saat pasar buka
+<b>🔴 Sinyal WASPADA — Peringatan teknikal:</b>
+• Kondisi bearish terdeteksi — hindari beli
+• <i>Di BEI tidak ada short-selling</i>, jadi TIDAK ada
+  sinyal jual/short. Hanya peringatan.
 
-Ketik /help untuk daftar perintah lengkap.
-Ketik /scan untuk mulai scan sinyal sekarang!
+<b>⚙️ Cara kerja:</b>
+• Pre-screen ~342 saham IDX setiap scan
+• Analisis teknikal 5m: RSI, MACD, BB, VWAP, ADX, SuperTrend
+• Notifikasi otomatis setiap <b>15 menit</b> saat bursa buka
+• Jam bursa: Sesi 1 (09:00–11:30) | Sesi 2 (13:30–15:00) WIB
+
+Ketik /help untuk daftar lengkap perintah.
+Ketik /scan untuk mulai scan sekarang!
 """.strip()
         await update.message.reply_text(welcome, parse_mode=ParseMode.HTML)
 
@@ -216,14 +226,16 @@ Ketik /scan untuk mulai scan sinyal sekarang!
 """.strip()
 
         if summary.get("total_signals", 0) > 0:
+            buy_n = summary.get('buy_signals', 0)
+            warn_n = summary.get('sell_signals', 0)  # masih dikembalikan sebagai sell_signals dari scanner
             msg += f"""
 
 📈 <b>RINGKASAN SCAN TERAKHIR</b>
-🎯 Market Bias : {summary.get('market_bias')}
-📊 Total Sinyal: {summary.get('total_signals')}
-🟢 BUY         : {summary.get('buy_signals')}
-🔴 SELL        : {summary.get('sell_signals')}
-⏰ Scan Time   : {summary.get('scan_time', 'N/A')}"""
+🎯 Market Bias    : {summary.get('market_bias')}
+📊 Total Sinyal   : {summary.get('total_signals')}
+🟢 BUY            : {buy_n}
+🔴 WASPADA        : {warn_n}
+⏰ Scan Time      : {summary.get('scan_time', 'N/A')}"""
 
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
@@ -340,36 +352,37 @@ Ketik /scan untuk mulai scan sinyal sekarang!
         msg += "\n💡 Gunakan /signal [KODE] untuk detail lengkap"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-    async def cmd_sell(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Tampilkan sinyal SELL saja."""
-        sell_signals = [
-            s for s in self.scanner.last_scan_results if s.signal_type == "SELL"]
+    async def cmd_waspada(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tampilkan sinyal WASPADA (kondisi bearish)."""
+        warn_signals = [
+            s for s in self.scanner.last_scan_results if s.signal_type == "WASPADA"]
 
-        if not sell_signals:
+        if not warn_signals:
             await update.message.reply_text(
-                "ℹ️ Tidak ada sinyal SELL. Gunakan /scan untuk memperbarui.",
+                "ℹ️ Tidak ada sinyal WASPADA saat ini. Gunakan /scan untuk memperbarui.",
                 parse_mode=ParseMode.HTML
             )
             return
 
-        msg = "🔴 <b>SINYAL SELL AKTIF:</b>\n\n"
-        for s in sell_signals[:5]:
-            def fmt(p):
-                return f"Rp {int(p):,}".replace(",", ".")
+        msg = "🔴 <b>SAHAM KONDISI WASPADA:</b>\n"
+        msg += "⚠️ <i>Di BEI tidak ada short-selling. Hindari posisi baru pada saham berikut:</i>\n\n"
+        for s in warn_signals[:8]:
+            alasan = s.reasons[1][:60] if len(s.reasons) > 1 else "kondisi teknikal memburuk"
             msg += (
-                f"• <b>{s.ticker_clean}</b> | "
-                f"Entry: {fmt(s.entry_price)} | TP2: {fmt(s.tp2)} | SL: {fmt(s.sl)} | "
+                f"• <b>{s.ticker_clean}</b> ({s.company_name}) | "
+                f"Harga: Rp {int(s.current_price):,} | "
                 f"Skor: {s.signal_score}/100\n"
+                f"  ↳ {alasan}\n"
             )
 
-        msg += "\n💡 Gunakan /signal [KODE] untuk detail lengkap"
+        msg += "\n💡 Gunakan /signal [KODE] untuk analisis lengkap"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     async def handle_unknown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle pesan yang bukan command."""
-        text = update.message.text.upper().strip()
-        # Kalau user kirim kode saham langsung
-        if text in [t for t in SCALPING_WATCHLIST]:
+        text = update.message.text.upper().strip().replace(".JK", "")
+        # Kalau user kirim kode saham langsung, langsung analisis
+        if len(text) <= 6 and text.isalpha():
             context.args = [text]
             await self.cmd_signal(update, context)
         else:
