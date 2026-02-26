@@ -289,12 +289,11 @@ class DataCrawler:
         total_failed = 0
         processed = 0
 
-        # Fast-fail detection: jika 2 batch berturut-turut gagal karena
-        # timeout/network error (bukan empty data), YF kemungkinan memblokir
-        # IP VPS. Dalam mode ini fallback per-ticker di-skip agar crawl tidak
-        # macet berjam-jam.
+        # Fast-fail detection: jika 1 batch gagal karena timeout/network
+        # error, YF kemungkinan memblokir IP VPS atau semua proxy mati.
+        # Fallback per-ticker di-skip agar crawl tidak macet berjam-jam.
         _consec_net_fail = 0
-        _NET_FAIL_THRESHOLD = 2
+        _NET_FAIL_THRESHOLD = 1
         _ip_blocked = False
 
         for raw_batch, yf_batch in batches:
@@ -392,47 +391,78 @@ class DataCrawler:
             else:
                 # Batch download gagal atau kosong
                 # Deteksi network error (timeout/connection) vs empty data
+                _NET_ERR_KWDS = ("timeout", "connection", "ssl", "remote",
+                                 "eof", "socket", "reset", "refused")
                 _is_net_error = batch_net_error is not None and any(
-                    kw in batch_net_error.lower()
-                    for kw in ("timeout", "connection", "ssl", "remote", "eof",
-                               "socket", "reset", "refused")
+                    kw in batch_net_error.lower() for kw in _NET_ERR_KWDS
                 )
+                # Mode rotate + batch silent-empty (proxy mati, tidak raise) →
+                # tetap hitung sebagai network fail agar fast-fail cepat
+                _proxy_mode = "off"
+                try:
+                    from config import settings as _s
+                    _proxy_mode = getattr(_s, "PROXY_MODE", "off")
+                except Exception:
+                    pass
+                if not _is_net_error and raw is None and _proxy_mode == "rotate":
+                    _is_net_error = True
+
                 if _is_net_error:
                     _consec_net_fail += 1
                     if _consec_net_fail >= _NET_FAIL_THRESHOLD:
                         _ip_blocked = True
 
+                _block_msg = (
+                    "IP_BLOCKED: Yahoo Finance memblokir IP ini / semua proxy mati. "
+                    "Set PROXY_MODE=off untuk coba direct, atau ganti PROXY_URL."
+                )
+
                 if _ip_blocked:
-                    # IP VPS kemungkinan diblokir YF — skip fallback per-ticker
-                    # agar crawl tidak macet berjam-jam.
-                    _block_msg = (
-                        "IP_BLOCKED: Yahoo Finance memblokir IP ini. "
-                        "Set PROXY_MODE=single + PROXY_URL di .env untuk bypass."
-                    )
+                    # Skip fallback per-ticker agar crawl tidak macet berjam-jam
                     for raw_ticker, _ in zip(raw_batch, yf_batch):
                         _status.tick(raw_ticker, ok=False, error=_block_msg)
                         total_failed += 1
                     if _block_msg not in all_errors:
                         all_errors.append(_block_msg)
                         logger.critical(
-                            "\n[Crawler] ⚠️  IP VPS DIBLOKIR YAHOO FINANCE ⚠️\n"
-                            "  Crawl akan lanjut tapi semua saham akan gagal.\n"
-                            "  Solusi: tambahkan ke .env:\n"
-                            "    PROXY_MODE=single\n"
-                            "    PROXY_URL=http://user:pass@host:port\n"
+                            "\n[Crawler] ⚠️  IP VPS DIBLOKIR / SEMUA PROXY MATI ⚠️\n"
+                            "  Crawl dihentikan untuk menghindari loop berjam-jam.\n"
+                            "  Opsi solusi (di file .env VPS):\n"
+                            "    1. Coba direct: PROXY_MODE=off\n"
+                            "    2. Proxy tunggal: PROXY_MODE=single + PROXY_URL=...\n"
+                            "    3. Filter proxy: python manage.py proxy health\n"
                         )
                 else:
-                    # Fallback per-ticker normal (data tidak tersedia / delisted)
+                    # Fallback per-ticker — dengan deteksi consecutive failure
+                    # agar bisa break out cepat jika semua proxy mati.
+                    # NOTE: yf_client.history() swallow exception → return None
+                    # sehingga error string selalu "empty_data". Kita hitung
+                    # consecutive failure (apapun errornya) sebagai signal.
+                    _consec_ticker_fail = 0
+                    _TICKER_FAIL_THRESHOLD = 3  # 3 ticker gagal berturut → stop
                     for raw_ticker, yf_ticker in zip(raw_batch, yf_batch):
+                        if _ip_blocked:
+                            _status.tick(raw_ticker, ok=False, error=_block_msg)
+                            total_failed += 1
+                            continue
                         ok, err = self._fetch_single(
                             raw_ticker, yf_ticker, period=period, interval=interval)
                         _status.tick(raw_ticker, ok=ok, error=err)
                         if ok:
                             total_success += 1
+                            _consec_ticker_fail = 0   # reset saat ada yang sukses
                         else:
                             total_failed += 1
                             if err:
                                 all_errors.append(f"{raw_ticker}: {err}")
+                            _consec_ticker_fail += 1
+                            if _consec_ticker_fail >= _TICKER_FAIL_THRESHOLD:
+                                _ip_blocked = True
+                                _consec_net_fail += 1
+                                logger.warning(
+                                    f"[Crawler] {_consec_ticker_fail} ticker berturut "
+                                    f"gagal di fallback → fast-fail sisa batch"
+                                )
 
             processed += len(raw_batch)
             if progress_cb:

@@ -494,12 +494,17 @@ def cmd_get_data(args):
         errors_daily = result_daily.get('errors', [])
         ip_blocked = any('IP_BLOCKED' in str(e) for e in errors_daily)
         if ip_blocked:
-            print("\n  [!!!] ========================================")
-            print("  [!!!] IP VPS DIBLOKIR YAHOO FINANCE")
-            print("  [!!!] Tambahkan ke file .env Anda:")
-            print("  [!!!]   PROXY_MODE=single")
-            print("  [!!!]   PROXY_URL=http://user:pass@host:port")
-            print("  [!!!] ========================================")
+            print("\n  [!!!] =========================================")
+            print("  [!!!] IP VPS DIBLOKIR / SEMUA PROXY MATI")
+            print("  [!!!] Opsi solusi di file .env VPS:")
+            print("  [!!!]   1. Test direct (tanpa proxy):")
+            print("  [!!!]      PROXY_MODE=off")
+            print("  [!!!]   2. Filter proxy yg hidup:")
+            print("  [!!!]      python manage.py proxy health")
+            print("  [!!!]   3. Proxy berbayar:")
+            print("  [!!!]      PROXY_MODE=single")
+            print("  [!!!]      PROXY_URL=http://user:pass@host:port")
+            print("  [!!!] =========================================")
         elif errors_daily:
             print(f"  [!] Contoh error: {errors_daily[0]}")
 

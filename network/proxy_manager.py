@@ -101,8 +101,18 @@ class ProxyManager:
             consec = self._consecutive_failures.get(proxy, 0) + 1
             self._consecutive_failures[proxy] = consec
 
-            # Blacklist jika >= 2 consecutive failures, atau 429
-            if consec >= 2 or is_429:
+            # Blacklist lebih agresif untuk proxy mati:
+            # - Timeout / connection error → langsung blacklist (1 kegagalan)
+            # - Error lain → butuh 2 kegagalan berturut-turut
+            # - 429 → langsung blacklist (rate-limit)
+            _is_timeout_err = any(
+                kw in err_str.lower()
+                for kw in ("timeout", "timed out", "connection", "refused",
+                           "ssl", "socket", "reset", "eof", "remote")
+            )
+            _blacklist_threshold = 1 if (_is_timeout_err or is_429) else 2
+            if consec >= _blacklist_threshold:
+
                 cooldown = self.cooldown_seconds * (2 if is_429 else 1)
                 self._blacklist[proxy] = time.time() + cooldown
                 logger.warning(

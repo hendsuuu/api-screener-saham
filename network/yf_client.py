@@ -101,7 +101,13 @@ class YFClient:
                     kwargs["end"] = end
 
                 # Inject proxy via session
-                session = _build_session(proxy, self.impersonate)
+                # Jika ada proxy → pakai proxy_manager.timeout (pendek, e.g. 8s)
+                # agar proxy mati cepat dideteksi. Direct → _SOCKET_TIMEOUT (45s).
+                _sess_timeout = (
+                    self.proxy_manager.timeout
+                    if proxy else _SOCKET_TIMEOUT
+                )
+                session = _build_session(proxy, self.impersonate, timeout=_sess_timeout)
                 if session is not None:
                     kwargs["session"] = session
 
@@ -155,7 +161,11 @@ class YFClient:
             self.limiter.wait_sync()
 
             try:
-                session = _build_session(proxy, self.impersonate)
+                _sess_timeout = (
+                    self.proxy_manager.timeout
+                    if proxy else _SOCKET_TIMEOUT
+                )
+                session = _build_session(proxy, self.impersonate, timeout=_sess_timeout)
                 if session is not None:
                     stock = yf.Ticker(ticker, session=session)
                 else:
@@ -197,19 +207,26 @@ class YFClient:
 
 # ─── Session Builder ──────────────────────────────────────────────────────────
 
-def _build_session(proxy: Optional[str], impersonate: str = "chrome110"):
+def _build_session(
+    proxy: Optional[str],
+    impersonate: str = "chrome110",
+    timeout: int = _SOCKET_TIMEOUT,
+):
     """
     Bangun curl_cffi session jika tersedia, fallback ke None.
 
     curl_cffi mendukung impersonation — menyamarkan fingerprint browser.
     Jika tidak terinstall, yfinance akan pakai session default-nya.
+
+    timeout: detik, default _SOCKET_TIMEOUT (45s untuk direct).
+             Untuk proxy mati, pakai PROXY_TIMEOUT (8s) agar gagal cepat.
     """
     if not proxy:
         return None
     try:
         from curl_cffi import requests as curl_req  # type: ignore
         session = curl_req.Session(
-            impersonate=impersonate, timeout=_SOCKET_TIMEOUT)
+            impersonate=impersonate, timeout=timeout)
         session.proxies = _build_proxies(proxy)
         return session
     except ImportError:
@@ -222,11 +239,13 @@ def _build_session(proxy: Optional[str], impersonate: str = "chrome110"):
         import requests as _req
         from requests.adapters import HTTPAdapter
 
+        _t = timeout  # capture untuk closure
+
         class _TimeoutAdapter(HTTPAdapter):
             """HTTPAdapter yang memaksa timeout di setiap request."""
 
             def send(self, *args, **kwargs):
-                kwargs.setdefault("timeout", _SOCKET_TIMEOUT)
+                kwargs.setdefault("timeout", _t)
                 return super().send(*args, **kwargs)
 
         session = _req.Session()
