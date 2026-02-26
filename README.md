@@ -499,27 +499,30 @@ Sistem proxy terintegrasi dengan seluruh request ke Yahoo Finance — baik saat 
 
 ### Mode Operasi
 
-| Mode | Keterangan |
-|---|---|
-| `off` | Koneksi langsung (default) |
-| `single` | Satu proxy tetap via `PROXY_URL` |
+| Mode     | Keterangan                                               |
+| -------- | -------------------------------------------------------- |
+| `off`    | Koneksi langsung (default)                               |
+| `single` | Satu proxy tetap via `PROXY_URL`                         |
 | `rotate` | Pool dari `data/proxies.txt`, rotasi otomatis saat error |
 
 ### Konfigurasi Cepat
 
 **Mode single proxy:**
+
 ```env
 PROXY_MODE=single
 PROXY_URL=http://user:pass@123.45.67.89:8080
 ```
 
 **Mode rotate (pool):**
+
 ```env
 PROXY_MODE=rotate
 PROXY_LIST_PATH=data/proxies.txt
 ```
 
 `data/proxies.txt` — satu baris per proxy:
+
 ```
 http://user:pass@1.2.3.4:8080
 http://user:pass@5.6.7.8:3128
@@ -528,16 +531,17 @@ socks5://user:pass@9.10.11.12:1080
 
 ### Fitur Proxy
 
-- **Auto-rotate** — ganti proxy otomatis saat koneksi gagal atau timeout  
-- **Blacklist sementara** — proxy gagal didinginkan selama `PROXY_COOLDOWN_SECONDS` (default 20 menit)  
-- **Fallback direct** — jika semua proxy gagal dan `PROXY_FALLBACK_DIRECT=true`, lanjut tanpa proxy  
-- **Health-check** — setiap proxy diverifikasi sebelum digunakan  
+- **Auto-rotate** — ganti proxy otomatis saat koneksi gagal atau timeout
+- **Blacklist sementara** — proxy gagal didinginkan selama `PROXY_COOLDOWN_SECONDS` (default 20 menit)
+- **Fallback direct** — jika semua proxy gagal dan `PROXY_FALLBACK_DIRECT=true`, lanjut tanpa proxy
+- **Health-check** — setiap proxy diverifikasi sebelum digunakan
 
 ### Adaptive Rate Limiter
 
 Delay antar request ke Yahoo Finance diatur secara adaptif:
-- **Naik** saat ada error atau HTTP 429  
-- **Turun perlahan** saat request berhasil  
+
+- **Naik** saat ada error atau HTTP 429
+- **Turun perlahan** saat request berhasil
 - Mencegah ban/rate-limit tanpa mengorbankan kecepatan saat kondisi normal
 
 ```bash

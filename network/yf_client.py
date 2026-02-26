@@ -109,7 +109,8 @@ class YFClient:
                     )
                     raise
 
-                sleep = self.retry_policy.backoff_seconds(attempt, is_429=is_429)
+                sleep = self.retry_policy.backoff_seconds(
+                    attempt, is_429=is_429)
                 logger.debug(
                     f"[yf_client] Retry {attempt}/{max_retry} "
                     f"proxy={_mask(proxy)} sleep={sleep:.1f}s err={e}"
@@ -164,7 +165,8 @@ class YFClient:
                     )
                     return None
 
-                sleep = self.retry_policy.backoff_seconds(attempt, is_429=is_429)
+                sleep = self.retry_policy.backoff_seconds(
+                    attempt, is_429=is_429)
                 logger.debug(
                     f"[yf_client] Retry {attempt}/{max_retry} "
                     f"{ticker} sleep={sleep:.1f}s proxy={_mask(proxy)}"

@@ -63,10 +63,12 @@ def _acquire_scheduler_lock() -> bool:
                 if os.name == "nt":
                     import ctypes
                     import ctypes.wintypes
-                    h = ctypes.windll.kernel32.OpenProcess(0x0400, False, old_pid)
+                    h = ctypes.windll.kernel32.OpenProcess(
+                        0x0400, False, old_pid)
                     if h:
                         code = ctypes.wintypes.DWORD()
-                        ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+                        ctypes.windll.kernel32.GetExitCodeProcess(
+                            h, ctypes.byref(code))
                         ctypes.windll.kernel32.CloseHandle(h)
                         if code.value == 259:  # STILL_ACTIVE
                             return False
@@ -151,7 +153,8 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️ Telegram bot handler gagal dimulai: {e}")
             bot_handler = None
     elif not settings.TELEGRAM_BOT_TOKEN:
-        logger.warning("⚠️ TELEGRAM_BOT_TOKEN tidak diset, bot handler dilewati")
+        logger.warning(
+            "⚠️ TELEGRAM_BOT_TOKEN tidak diset, bot handler dilewati")
     else:
         logger.info("ℹ️ Bot polling dilewati (bukan main worker)")
 
@@ -262,7 +265,8 @@ class SignalResponse(BaseModel):
 class ScanRequest(BaseModel):
     tickers: Optional[List[str]] = None
     min_score: int = 50
-    min_volume_ratio: float = 0.0   # 0.0 = tidak ada filter volume (hanya skor)
+    # 0.0 = tidak ada filter volume (hanya skor)
+    min_volume_ratio: float = 0.0
     signal_filter: Optional[str] = None  # "BUY", "SELL", None
     send_telegram: bool = False
     skip_prescreen: bool = False  # True = scan seluruh IDX_UNIVERSE langsung
@@ -935,7 +939,8 @@ if __name__ == "__main__":
             "main:app",
             host=settings.API_HOST,
             port=settings.API_PORT,
-            workers=1 if settings.DEBUG else workers,  # reload tidak kompatibel dgn workers>1
+            # reload tidak kompatibel dgn workers>1
+            workers=1 if settings.DEBUG else workers,
             reload=settings.DEBUG,
             log_level="debug" if settings.DEBUG else "info",
             access_log=settings.DEBUG,  # matikan access log di production untuk performa

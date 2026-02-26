@@ -638,7 +638,8 @@ def cmd_proxy(args):
         if current:
             pm.rotate()
             new_proxy = pm.get_proxy()
-            print(f"  [✓] Rotasi: {pm._mask(current)} → {pm._mask(new_proxy) if new_proxy else 'direct'}")
+            print(
+                f"  [✓] Rotasi: {pm._mask(current)} → {pm._mask(new_proxy) if new_proxy else 'direct'}")
         else:
             print("  [!] Proxy mode off atau tidak ada proxy terkonfigurasi")
 

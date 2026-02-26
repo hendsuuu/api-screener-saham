@@ -96,7 +96,8 @@ class Settings:
     ]
 
     # ─── Proxy System ─────────────────────────────
-    PROXY_MODE: str = os.getenv("PROXY_MODE", "off")           # off | single | rotate
+    # off | single | rotate
+    PROXY_MODE: str = os.getenv("PROXY_MODE", "off")
     PROXY_URL: str = os.getenv("PROXY_URL", "")
     PROXY_LIST_PATH: str = os.getenv("PROXY_LIST_PATH", "data/proxies.txt")
     PROXY_TIMEOUT: int = int(os.getenv("PROXY_TIMEOUT", "12"))
@@ -107,7 +108,8 @@ class Settings:
     PROXY_FALLBACK_DIRECT: bool = (
         os.getenv("PROXY_FALLBACK_DIRECT", "true").lower() == "true"
     )
-    PROXY_COOLDOWN_SECONDS: int = int(os.getenv("PROXY_COOLDOWN_SECONDS", "1200"))
+    PROXY_COOLDOWN_SECONDS: int = int(
+        os.getenv("PROXY_COOLDOWN_SECONDS", "1200"))
     PROXY_HEALTHCHECK_URL: str = os.getenv(
         "PROXY_HEALTHCHECK_URL", "https://query1.finance.yahoo.com"
     )

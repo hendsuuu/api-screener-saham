@@ -80,7 +80,8 @@ class ProxyManager:
         if not proxy:
             return
         with self._lock:
-            s = self._stats.setdefault(proxy, {"ok": 0, "fail": 0, "last_error": "", "last_ok_ts": 0.0})
+            s = self._stats.setdefault(
+                proxy, {"ok": 0, "fail": 0, "last_error": "", "last_ok_ts": 0.0})
             s["ok"] += 1
             s["last_ok_ts"] = time.time()
             self._consecutive_failures[proxy] = 0
@@ -92,7 +93,8 @@ class ProxyManager:
         is_429 = _is_429(err_str)
 
         with self._lock:
-            s = self._stats.setdefault(proxy, {"ok": 0, "fail": 0, "last_error": "", "last_ok_ts": 0.0})
+            s = self._stats.setdefault(
+                proxy, {"ok": 0, "fail": 0, "last_error": "", "last_ok_ts": 0.0})
             s["fail"] += 1
             s["last_error"] = err_str[:200]
 
@@ -107,7 +109,8 @@ class ProxyManager:
                     f"[proxy] Blacklist {_mask(proxy)} "
                     f"cooldown={cooldown}s reason={'429' if is_429 else 'consecutive_fail'}"
                 )
-                self._log_event("proxy_blacklist", proxy, reason="HTTP_429" if is_429 else "CONSECUTIVE_FAIL")
+                self._log_event(
+                    "proxy_blacklist", proxy, reason="HTTP_429" if is_429 else "CONSECUTIVE_FAIL")
 
             if self.rotate_on_error:
                 self._advance()
@@ -161,7 +164,8 @@ class ProxyManager:
             return
 
         if not os.path.exists(self.list_path):
-            logger.warning(f"[proxy] List file tidak ditemukan: {self.list_path}")
+            logger.warning(
+                f"[proxy] List file tidak ditemukan: {self.list_path}")
             return
 
         loaded: List[str] = []
@@ -172,7 +176,8 @@ class ProxyManager:
                     loaded.append(line)
 
         self._proxies = loaded
-        logger.info(f"[proxy] Loaded {len(loaded)} proxies dari {self.list_path}")
+        logger.info(
+            f"[proxy] Loaded {len(loaded)} proxies dari {self.list_path}")
 
     def _current_proxy(self) -> Optional[str]:
         """Kembalikan proxy aktif saat ini (tidak diblacklist)."""

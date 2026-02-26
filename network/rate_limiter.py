@@ -76,7 +76,8 @@ class AdaptiveRateLimiter:
     def report_success(self) -> None:
         with self._lock:
             self._recent.append(True)
-            self._delay = max(self.base_delay, self._delay - self.success_decay)
+            self._delay = max(
+                self.base_delay, self._delay - self.success_decay)
             self._add_event("ok")
 
     def report_error(self, is_429: bool = False) -> None:

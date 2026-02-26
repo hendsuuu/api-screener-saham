@@ -82,7 +82,8 @@ class StockDataFetcher:
             try:
                 # Pakai YFClient jika tersedia (proxy + rate limiter)
                 if self.yf is not None:
-                    df = self.yf.history(ticker, period=period, interval=interval)
+                    df = self.yf.history(
+                        ticker, period=period, interval=interval)
                 else:
                     stock = yf.Ticker(ticker)
                     df = stock.history(period=period, interval=interval)
@@ -91,7 +92,8 @@ class StockDataFetcher:
                     # Coba fallback period lebih panjang agar indikator bisa dihitung
                     if attempt == 1 and period == "5d":
                         if self.yf is not None:
-                            df = self.yf.history(ticker, period="1mo", interval=interval)
+                            df = self.yf.history(
+                                ticker, period="1mo", interval=interval)
                         else:
                             stock = yf.Ticker(ticker)
                             df = stock.history(period="1mo", interval=interval)
@@ -157,7 +159,8 @@ class StockDataFetcher:
         for attempt in range(1, 3):
             try:
                 if self.yf is not None:
-                    df = self.yf.history(ticker, period=period, interval=interval)
+                    df = self.yf.history(
+                        ticker, period=period, interval=interval)
                 else:
                     stock = yf.Ticker(ticker)
                     df = stock.history(period=period, interval=interval)
