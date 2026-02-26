@@ -464,7 +464,8 @@ def cmd_get_data(args):
             pbar = _tqdm(total=len(tickers), unit="saham", desc="Harian")
 
             def _cb_daily(done, total, label):
-                pbar.update(1)
+                # done = jumlah kumulatif ticker selesai
+                pbar.update(done - pbar.n)
                 pbar.set_postfix({"last": label[:15]})
 
             t0 = time.time()
@@ -507,7 +508,7 @@ def cmd_get_data(args):
             pbar2 = _tqdm(total=len(tickers), unit="saham", desc="Intraday")
 
             def _cb_intra(done, total, ticker):
-                pbar2.update(1)
+                pbar2.update(done - pbar2.n)  # done = kumulatif ticker selesai
                 pbar2.set_postfix({"last": ticker[:8]})
 
             t0 = time.time()

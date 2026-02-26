@@ -4,9 +4,13 @@ Menggunakan HTML formatting untuk Telegram
 """
 
 import html
-from screener.signal_generator import ScalpSignal
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List, Dict
+
+from screener.signal_generator import ScalpSignal
+
+_TZ_JKT = ZoneInfo("Asia/Jakarta")
 
 
 class TelegramFormatter:
@@ -51,7 +55,7 @@ class TelegramFormatter:
         macd_emoji = "🟢" if signal.macd_signal == "BULLISH" else (
             "🔴" if signal.macd_signal == "BEARISH" else "🟡")
         rsi_emoji = "🟢" if 30 < signal.rsi < 70 else "🔴"
-        now = datetime.now().strftime("%d/%m/%Y %H:%M WIB")
+        now = datetime.now(_TZ_JKT).strftime("%d/%m/%Y %H:%M WIB")
 
         msg = f"""
 🔴 <b>SINYAL WASPADA</b> 🔴
@@ -146,7 +150,7 @@ bukan rekomendasi transaksi. Selalu gunakan manajemen risiko!</i>
             "🔴" if signal.rsi > 70 or signal.rsi < 30 else "🟡")
         macd_emoji = "🟢" if signal.macd_signal == "BULLISH" else (
             "🔴" if signal.macd_signal == "BEARISH" else "🟡")
-        now = datetime.now().strftime("%d/%m/%Y %H:%M WIB")
+        now = datetime.now(_TZ_JKT).strftime("%d/%m/%Y %H:%M WIB")
 
         msg = f"""
 🟢 <b>SINYAL BUY</b> 🟢
@@ -228,7 +232,7 @@ Selalu lakukan riset sendiri. Manajemen risiko adalah kunci!</i>
         """
         Format ringkasan hasil scan ke pesan Telegram.
         """
-        now = datetime.now().strftime("%d/%m/%Y %H:%M WIB")
+        now = datetime.now(_TZ_JKT).strftime("%d/%m/%Y %H:%M WIB")
 
         buy_signals = [s for s in signals if s.signal_type == "BUY"]
         warn_signals = [s for s in signals if s.signal_type == "WASPADA"]
@@ -328,19 +332,21 @@ Contoh: /signal BBCA</i>
         adx = info.get("adx", 0.0)
         atr_pct = info.get("atr_pct", 0.0)
         potential = html.escape(info.get("potential", "NETRAL"))
-        pot_detail = [html.escape(str(x)) for x in info.get("potential_detail", [])]
+        pot_detail = [html.escape(str(x))
+                      for x in info.get("potential_detail", [])]
         risk = html.escape(info.get("risk", "SEDANG"))
-        risk_detail = [html.escape(str(x)) for x in info.get("risk_detail", [])]
+        risk_detail = [html.escape(str(x))
+                       for x in info.get("risk_detail", [])]
         conf = info.get("confidence", 0)
-        conf_r = [html.escape(str(x)) for x in info.get("confidence_reasons", [])]
+        conf_r = [html.escape(str(x))
+                  for x in info.get("confidence_reasons", [])]
         cross_up = info.get("ema_cross_up", False)
         cross_dn = info.get("ema_cross_down", False)
         mcross_up = info.get("macd_cross_up", False)
         mcross_dn = info.get("macd_cross_down", False)
         source = info.get("data_source", "")
 
-        from datetime import datetime
-        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        now = datetime.now(_TZ_JKT).strftime("%d/%m/%Y %H:%M")
 
         # Trend icon
         trend_icon = {
@@ -461,7 +467,7 @@ Contoh: /signal BBCA</i>
         )
 
         return msg.strip()
- 
+
     @staticmethod
     def format_help() -> str:
         """Pesan bantuan command bot."""
@@ -563,12 +569,14 @@ Keputusan trading tetap sepenuhnya di tangan Anda!</i>
             lines.append("➕ <b>CUSTOM (Tambahan Manual)</b>")
             for s in custom_stocks:
                 ticker = html.escape(s.get("ticker", ""))
-                name = html.escape(s.get("name", "") or COMPANY_NAMES.get(s.get("ticker", ""), "-"))
+                name = html.escape(s.get("name", "") or COMPANY_NAMES.get(
+                    s.get("ticker", ""), "-"))
                 added_at = s.get("added_at", "")[:10]
                 lines.append(f"• <b>{ticker}</b>  {name}  <i>({added_at})</i>")
         else:
             lines.append("\n━━━━━━━━━━━━━━━━━━━━")
-            lines.append("➕ <i>Belum ada saham custom. Gunakan /addstock TICKER [Nama]</i>")
+            lines.append(
+                "➕ <i>Belum ada saham custom. Gunakan /addstock TICKER [Nama]</i>")
 
         lines.append("\n━━━━━━━━━━━━━━━━━━━━")
         lines.append("💡 Admin: /addstock KODE [Nama Perusahaan]")
@@ -613,7 +621,8 @@ Keputusan trading tetap sepenuhnya di tangan Anda!</i>
             if r[1] == "builtin":
                 label = "✅ <b>Ada</b> — IDX Universe (built-in)"
                 name_line = f"   🏷 {name}" if name else ""
-                lines.append(f"\n<b>{ticker}</b>\n{label}{chr(10) + name_line if name_line else ''}")
+                lines.append(
+                    f"\n<b>{ticker}</b>\n{label}{chr(10) + name_line if name_line else ''}")
 
             elif r[1] == "custom":
                 cdata = r[2] if len(r) > 2 else {}
@@ -635,6 +644,7 @@ Keputusan trading tetap sepenuhnya di tangan Anda!</i>
 
         if not_found > 0:
             lines.append("\n━━━━━━━━━━━━━━━━━━━━")
-            lines.append("ℹ️ Saham tidak ditemukan belum di-screen. Admin dapat menambahkannya.")
+            lines.append(
+                "ℹ️ Saham tidak ditemukan belum di-screen. Admin dapat menambahkannya.")
 
         return "\n".join(lines)

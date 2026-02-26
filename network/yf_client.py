@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 from typing import List, Optional, Union
 
 import pandas as pd
@@ -22,6 +23,12 @@ from network.rate_limiter import AdaptiveRateLimiter, get_rate_limiter
 from network.retry_policy import RetryPolicy
 
 logger = logging.getLogger(__name__)
+
+# Timeout (detik) untuk satu panggilan yf.download()/Ticker.history().
+# VPS sering diblokir Yahoo Finance sehingga request hung tanpa batas;
+# timeout ini memastikan crawl tetap maju meski satu batch/ticker macet.
+_DOWNLOAD_TIMEOUT = 60   # per batch yf.download()
+_HISTORY_TIMEOUT = 30   # per ticker Ticker.history()
 
 # Matikan noise yfinance
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -92,7 +99,19 @@ class YFClient:
                 if session is not None:
                     kwargs["session"] = session
 
-                df = yf.download(**kwargs)
+                # Jalankan dalam thread agar bisa di-timeout.
+                # yf.download() bisa hang selamanya kalau VPS-IP diblokir.
+                with ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(yf.download, **kwargs)
+                    try:
+                        df = _fut.result(timeout=_DOWNLOAD_TIMEOUT)
+                    except _FutureTimeout:
+                        _fut.cancel()
+                        raise TimeoutError(
+                            f"yf.download timed out after {_DOWNLOAD_TIMEOUT}s "
+                            f"(proxy={_mask(proxy)})"
+                        )
+
                 self.proxy_manager.report_success(proxy)
                 self.limiter.report_success()
                 return df
@@ -144,11 +163,22 @@ class YFClient:
                 else:
                     stock = yf.Ticker(ticker)
 
-                df = stock.history(
+                # Jalankan dalam thread agar bisa di-timeout untuk VPS.
+                _hist_kwargs = dict(
                     period=period,
                     interval=interval,
                     auto_adjust=auto_adjust,
                 )
+                with ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(stock.history, **_hist_kwargs)
+                    try:
+                        df = _fut.result(timeout=_HISTORY_TIMEOUT)
+                    except _FutureTimeout:
+                        _fut.cancel()
+                        raise TimeoutError(
+                            f"Ticker.history timed out after {_HISTORY_TIMEOUT}s "
+                            f"({ticker})"
+                        )
 
                 self.proxy_manager.report_success(proxy)
                 self.limiter.report_success()
