@@ -289,12 +289,21 @@ class DataCrawler:
         total_failed = 0
         processed = 0
 
+        # Fast-fail detection: jika 2 batch berturut-turut gagal karena
+        # timeout/network error (bukan empty data), YF kemungkinan memblokir
+        # IP VPS. Dalam mode ini fallback per-ticker di-skip agar crawl tidak
+        # macet berjam-jam.
+        _consec_net_fail = 0
+        _NET_FAIL_THRESHOLD = 2
+        _ip_blocked = False
+
         for raw_batch, yf_batch in batches:
             batch_label = ", ".join(raw_batch[:3]) + (
                 f" +{len(raw_batch)-3}" if len(raw_batch) > 3 else ""
             )
             logger.debug(f"[Crawler] Batch: {batch_label}")
 
+            batch_net_error: Optional[str] = None
             try:
                 # yfinance 1.2.0: TIDAK pakai group_by; MultiIndex sekarang
                 # (Price, Ticker) — level 0 = tipe harga, level 1 = ticker
@@ -315,6 +324,7 @@ class DataCrawler:
                         progress=False,
                     )
             except Exception as e:
+                batch_net_error = str(e)
                 logger.warning(f"[Crawler] Batch download error: {e}")
                 raw = None  # Fallback ke per-ticker di bawah
 
@@ -323,6 +333,11 @@ class DataCrawler:
                 and not raw.empty
                 and isinstance(raw.columns, pd.MultiIndex)
             )
+
+            if batch_ok:
+                # Batch berhasil → reset counter
+                _consec_net_fail = 0
+                _ip_blocked = False
 
             if batch_ok and len(yf_batch) > 1:
                 # yfinance 1.2.0 batch: level 1 berisi nama ticker
@@ -375,17 +390,49 @@ class DataCrawler:
                     total_failed += 1
 
             else:
-                # Batch download gagal atau kosong → fallback per-ticker
-                for raw_ticker, yf_ticker in zip(raw_batch, yf_batch):
-                    ok, err = self._fetch_single(
-                        raw_ticker, yf_ticker, period=period, interval=interval)
-                    _status.tick(raw_ticker, ok=ok, error=err)
-                    if ok:
-                        total_success += 1
-                    else:
+                # Batch download gagal atau kosong
+                # Deteksi network error (timeout/connection) vs empty data
+                _is_net_error = batch_net_error is not None and any(
+                    kw in batch_net_error.lower()
+                    for kw in ("timeout", "connection", "ssl", "remote", "eof",
+                               "socket", "reset", "refused")
+                )
+                if _is_net_error:
+                    _consec_net_fail += 1
+                    if _consec_net_fail >= _NET_FAIL_THRESHOLD:
+                        _ip_blocked = True
+
+                if _ip_blocked:
+                    # IP VPS kemungkinan diblokir YF — skip fallback per-ticker
+                    # agar crawl tidak macet berjam-jam.
+                    _block_msg = (
+                        "IP_BLOCKED: Yahoo Finance memblokir IP ini. "
+                        "Set PROXY_MODE=single + PROXY_URL di .env untuk bypass."
+                    )
+                    for raw_ticker, _ in zip(raw_batch, yf_batch):
+                        _status.tick(raw_ticker, ok=False, error=_block_msg)
                         total_failed += 1
-                        if err:
-                            all_errors.append(f"{raw_ticker}: {err}")
+                    if _block_msg not in all_errors:
+                        all_errors.append(_block_msg)
+                        logger.critical(
+                            "\n[Crawler] ⚠️  IP VPS DIBLOKIR YAHOO FINANCE ⚠️\n"
+                            "  Crawl akan lanjut tapi semua saham akan gagal.\n"
+                            "  Solusi: tambahkan ke .env:\n"
+                            "    PROXY_MODE=single\n"
+                            "    PROXY_URL=http://user:pass@host:port\n"
+                        )
+                else:
+                    # Fallback per-ticker normal (data tidak tersedia / delisted)
+                    for raw_ticker, yf_ticker in zip(raw_batch, yf_batch):
+                        ok, err = self._fetch_single(
+                            raw_ticker, yf_ticker, period=period, interval=interval)
+                        _status.tick(raw_ticker, ok=ok, error=err)
+                        if ok:
+                            total_success += 1
+                        else:
+                            total_failed += 1
+                            if err:
+                                all_errors.append(f"{raw_ticker}: {err}")
 
             processed += len(raw_batch)
             if progress_cb:

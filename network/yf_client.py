@@ -11,8 +11,8 @@ Semua panggilan ke yfinance melewati sini sehingga:
 from __future__ import annotations
 
 import logging
+import socket
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 from typing import List, Optional, Union
 
 import pandas as pd
@@ -24,11 +24,17 @@ from network.retry_policy import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
-# Timeout (detik) untuk satu panggilan yf.download()/Ticker.history().
-# VPS sering diblokir Yahoo Finance sehingga request hung tanpa batas;
-# timeout ini memastikan crawl tetap maju meski satu batch/ticker macet.
-_DOWNLOAD_TIMEOUT = 60   # per batch yf.download()
-_HISTORY_TIMEOUT = 30   # per ticker Ticker.history()
+# ─── Socket-level timeout ─────────────────────────────────────────────────────
+# Set timeout TCP global agar yf.download() / Ticker.history() tidak hang
+# selamanya ketika IP VPS diblokir Yahoo Finance.
+# socket.timeout adalah subclass OSError → ditangkap retry_policy.should_retry().
+#
+# PENTING: ThreadPoolExecutor TIDAK bisa menghentikan thread yang sudah running.
+# Satu-satunya cara reliable mem-cancel request yfinance adalah socket timeout
+# di level OS ini — bukan wrapper thread.
+_SOCKET_TIMEOUT = 45   # detik, berlaku untuk semua socket di proses ini
+
+socket.setdefaulttimeout(_SOCKET_TIMEOUT)
 
 # Matikan noise yfinance
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -99,19 +105,11 @@ class YFClient:
                 if session is not None:
                     kwargs["session"] = session
 
-                # Jalankan dalam thread agar bisa di-timeout.
-                # yf.download() bisa hang selamanya kalau VPS-IP diblokir.
-                with ThreadPoolExecutor(max_workers=1) as _ex:
-                    _fut = _ex.submit(yf.download, **kwargs)
-                    try:
-                        df = _fut.result(timeout=_DOWNLOAD_TIMEOUT)
-                    except _FutureTimeout:
-                        _fut.cancel()
-                        raise TimeoutError(
-                            f"yf.download timed out after {_DOWNLOAD_TIMEOUT}s "
-                            f"(proxy={_mask(proxy)})"
-                        )
-
+                # socket.setdefaulttimeout(_SOCKET_TIMEOUT) di atas memastikan
+                # panggilan ini timeout secara alami via OS — tidak perlu
+                # ThreadPoolExecutor (yang justru HANG saat thread tidak bisa
+                # di-cancel karena sudah running).
+                df = yf.download(**kwargs)
                 self.proxy_manager.report_success(proxy)
                 self.limiter.report_success()
                 return df
@@ -163,22 +161,13 @@ class YFClient:
                 else:
                     stock = yf.Ticker(ticker)
 
-                # Jalankan dalam thread agar bisa di-timeout untuk VPS.
-                _hist_kwargs = dict(
+                # socket.setdefaulttimeout() memastikan ini timeout sendiri
+                # tanpa perlu wrapper thread.
+                df = stock.history(
                     period=period,
                     interval=interval,
                     auto_adjust=auto_adjust,
                 )
-                with ThreadPoolExecutor(max_workers=1) as _ex:
-                    _fut = _ex.submit(stock.history, **_hist_kwargs)
-                    try:
-                        df = _fut.result(timeout=_HISTORY_TIMEOUT)
-                    except _FutureTimeout:
-                        _fut.cancel()
-                        raise TimeoutError(
-                            f"Ticker.history timed out after {_HISTORY_TIMEOUT}s "
-                            f"({ticker})"
-                        )
 
                 self.proxy_manager.report_success(proxy)
                 self.limiter.report_success()
@@ -219,19 +208,29 @@ def _build_session(proxy: Optional[str], impersonate: str = "chrome110"):
         return None
     try:
         from curl_cffi import requests as curl_req  # type: ignore
-        session = curl_req.Session(impersonate=impersonate)
-        if proxy:
-            session.proxies = _build_proxies(proxy)
+        session = curl_req.Session(impersonate=impersonate, timeout=_SOCKET_TIMEOUT)
+        session.proxies = _build_proxies(proxy)
         return session
     except ImportError:
         pass
     except Exception as e:
         logger.debug(f"[yf_client] curl_cffi session error: {e}")
 
-    # Fallback: requests.Session biasa
+    # Fallback: requests.Session biasa dengan timeout adapter
     try:
         import requests as _req
+        from requests.adapters import HTTPAdapter
+
+        class _TimeoutAdapter(HTTPAdapter):
+            """HTTPAdapter yang memaksa timeout di setiap request."""
+            def send(self, *args, **kwargs):
+                kwargs.setdefault("timeout", _SOCKET_TIMEOUT)
+                return super().send(*args, **kwargs)
+
         session = _req.Session()
+        adapter = _TimeoutAdapter()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
         if proxy:
             session.proxies = _build_proxies(proxy)
         return session

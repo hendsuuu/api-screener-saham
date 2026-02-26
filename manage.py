@@ -491,8 +491,17 @@ def cmd_get_data(args):
         print(f"\n  [✓] Harian selesai ({elapsed:.0f}s)")
         print(
             f"  [i] OK: {result_daily['success']} | Gagal: {result_daily['failed']}")
-        if result_daily.get('errors'):
-            print(f"  [!] Contoh error: {result_daily['errors'][0]}")
+        errors_daily = result_daily.get('errors', [])
+        ip_blocked = any('IP_BLOCKED' in str(e) for e in errors_daily)
+        if ip_blocked:
+            print("\n  [!!!] ========================================")
+            print("  [!!!] IP VPS DIBLOKIR YAHOO FINANCE")
+            print("  [!!!] Tambahkan ke file .env Anda:")
+            print("  [!!!]   PROXY_MODE=single")
+            print("  [!!!]   PROXY_URL=http://user:pass@host:port")
+            print("  [!!!] ========================================")
+        elif errors_daily:
+            print(f"  [!] Contoh error: {errors_daily[0]}")
 
     if interval in ("5m", "all"):
         print(f"\n  ╔═══════════════════════════════════════════╗")
@@ -785,6 +794,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_proxy_rotate = proxy_sub.add_parser(
         "rotate", help="Paksa rotasi ke proxy berikutnya")
     p_proxy_rotate.set_defaults(func=cmd_proxy, subcmd="rotate")
+
+    p_proxy_health = proxy_sub.add_parser(
+        "health",
+        help="Test semua proxy di daftar, simpan yang hidup ke file",
+        description=(
+            "Test seluruh proxy di data/proxies.txt secara paralel ke Yahoo Finance.\n"
+            "Proxy yang berhasil konek disimpan kembali ke file yang sama\n"
+            "(atau file lain via --output).\n\n"
+            "Contoh:\n"
+            "  python manage.py proxy health\n"
+            "  python manage.py proxy health --workers 50 --timeout 6\n"
+            "  python manage.py proxy health --output data/proxies_clean.txt\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_proxy_health.add_argument(
+        "--workers", type=int, default=30,
+        help="Jumlah thread paralel (default: 30)"
+    )
+    p_proxy_health.add_argument(
+        "--timeout", type=int, default=8,
+        help="Timeout per proxy dalam detik (default: 8)"
+    )
+    p_proxy_health.add_argument(
+        "--list-path", default=None,
+        help="Path file proxy input (default: dari .env PROXY_LIST_PATH)"
+    )
+    p_proxy_health.add_argument(
+        "--output", default=None,
+        help="Path file output hasil filter (default: timpa file input)"
+    )
+    p_proxy_health.set_defaults(func=cmd_proxy, subcmd="health")
 
     return parser
 
