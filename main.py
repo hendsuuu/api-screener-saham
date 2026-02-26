@@ -861,6 +861,36 @@ async def clear_errors(_: bool = Depends(verify_api_key)):
 
 
 # ════════════════════════════════════════════════
+# PROXY / NETWORK STATUS
+# ════════════════════════════════════════════════
+
+
+@app.get("/proxy/status", tags=["Network"])
+async def proxy_status(_: bool = Depends(verify_api_key)):
+    """
+    Status proxy manager dan adaptive rate limiter.
+
+    Mengembalikan:
+    - mode proxy (off / single / rotate)
+    - jumlah proxy aktif / blacklisted
+    - delay rate limiter saat ini
+    - recent error rate
+    """
+    result: dict = {}
+    try:
+        from network.proxy_manager import get_proxy_manager
+        result["proxy"] = get_proxy_manager().status()
+    except Exception as e:
+        result["proxy"] = {"error": str(e)}
+    try:
+        from network.rate_limiter import get_rate_limiter
+        result["rate_limiter"] = get_rate_limiter().status()
+    except Exception as e:
+        result["rate_limiter"] = {"error": str(e)}
+    return result
+
+
+# ════════════════════════════════════════════════
 # ENTRY POINT
 # ════════════════════════════════════════════════
 

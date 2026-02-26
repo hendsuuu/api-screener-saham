@@ -22,7 +22,8 @@ class Settings:
     SCAN_INTERVAL_MINUTES: int = int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
     MIN_SIGNAL_SCORE: int = int(os.getenv("MIN_SIGNAL_SCORE", "50"))
     MAX_SIGNALS_PER_SCAN: int = int(os.getenv("MAX_SIGNALS_PER_SCAN", "10"))
-    MIN_VOLUME_RATIO: float = float(os.getenv("MIN_VOLUME_RATIO", "0.0"))  # 0.0 = dinonaktifkan
+    MIN_VOLUME_RATIO: float = float(
+        os.getenv("MIN_VOLUME_RATIO", "0.0"))  # 0.0 = dinonaktifkan
 
     # ─── Pre-screen Criteria (Dynamic Screener) ───
     # Harga minimum saham (Rp) — filter sub-gocap / penny stock
@@ -93,6 +94,35 @@ class Settings:
         for x in os.getenv("ADMIN_CHAT_IDS", "").split(",")
         if x.strip().lstrip("-").isdigit()
     ]
+
+    # ─── Proxy System ─────────────────────────────
+    PROXY_MODE: str = os.getenv("PROXY_MODE", "off")           # off | single | rotate
+    PROXY_URL: str = os.getenv("PROXY_URL", "")
+    PROXY_LIST_PATH: str = os.getenv("PROXY_LIST_PATH", "data/proxies.txt")
+    PROXY_TIMEOUT: int = int(os.getenv("PROXY_TIMEOUT", "12"))
+    PROXY_MAX_RETRY: int = int(os.getenv("PROXY_MAX_RETRY", "3"))
+    PROXY_ROTATE_ON_ERROR: bool = (
+        os.getenv("PROXY_ROTATE_ON_ERROR", "true").lower() == "true"
+    )
+    PROXY_FALLBACK_DIRECT: bool = (
+        os.getenv("PROXY_FALLBACK_DIRECT", "true").lower() == "true"
+    )
+    PROXY_COOLDOWN_SECONDS: int = int(os.getenv("PROXY_COOLDOWN_SECONDS", "1200"))
+    PROXY_HEALTHCHECK_URL: str = os.getenv(
+        "PROXY_HEALTHCHECK_URL", "https://query1.finance.yahoo.com"
+    )
+
+    # ─── Adaptive Rate Limiter ────────────────────
+    YF_BASE_DELAY: float = float(os.getenv("YF_BASE_DELAY", "0.3"))
+    YF_MAX_DELAY: float = float(os.getenv("YF_MAX_DELAY", "3.0"))
+    YF_SUCCESS_DECAY: float = float(os.getenv("YF_SUCCESS_DECAY", "0.05"))
+    YF_ERROR_BOOST: float = float(os.getenv("YF_ERROR_BOOST", "0.35"))
+    YF_429_EXTRA_BOOST: float = float(os.getenv("YF_429_EXTRA_BOOST", "0.8"))
+    YF_ERROR_WINDOW: int = int(os.getenv("YF_ERROR_WINDOW", "30"))
+    CRAWL_SHUFFLE_TICKERS: bool = (
+        os.getenv("CRAWL_SHUFFLE_TICKERS", "true").lower() == "true"
+    )
+    CRAWL_DELAY_JITTER: float = float(os.getenv("CRAWL_DELAY_JITTER", "0.25"))
 
     def build_screener_criteria(self):
         """Buat ScreenerCriteria dari nilai config saat ini."""

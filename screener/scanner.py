@@ -173,14 +173,16 @@ class StockScanner:
                 _, _, hist = self.generator.ind.macd(close, 12, 26, 9)
                 macd_hist_val = float(hist.iloc[-1])
                 trend = self.generator._get_trend(df_5m)
-                vol_ratio = float(self.generator.ind.volume_ratio(df_5m, 20).iloc[-1])
+                vol_ratio = float(
+                    self.generator.ind.volume_ratio(df_5m, 20).iloc[-1])
                 logger.info(
                     f"[NO SIGNAL] {ticker_raw}: RSI={rsi_val:.1f} "
                     f"MACD_hist={macd_hist_val:.4f} trend={trend} "
                     f"vol={vol_ratio:.2f}x — tidak memenuhi threshold"
                 )
             except Exception:
-                logger.info(f"[NO SIGNAL] {ticker_raw}: tidak ada sinyal (skor < 45)")
+                logger.info(
+                    f"[NO SIGNAL] {ticker_raw}: tidak ada sinyal (skor < 45)")
 
             return None
 
@@ -301,8 +303,9 @@ class StockScanner:
 
         # ── Filter & urutkan ─────────────────────────────────
         after_score = [s for s in signals if s.signal_score >= min_score]
-        after_vol   = [s for s in after_score if s.volume_ratio >= min_volume_ratio]
-        filtered    = [
+        after_vol = [
+            s for s in after_score if s.volume_ratio >= min_volume_ratio]
+        filtered = [
             s for s in after_vol
             if signal_filter is None or s.signal_type == signal_filter
         ]
@@ -310,7 +313,8 @@ class StockScanner:
 
         # Log saham yang gugur di tiap filter
         score_rejected = [s for s in signals if s.signal_score < min_score]
-        vol_rejected   = [s for s in after_score if s.volume_ratio < min_volume_ratio]
+        vol_rejected = [
+            s for s in after_score if s.volume_ratio < min_volume_ratio]
         if score_rejected:
             logger.info(
                 f"  ❌ Gugur filter skor (<{min_score}): "
@@ -674,24 +678,32 @@ class StockScanner:
                     from screener.signal_generator import SignalGenerator as _SG
                     _gen = _SG()
                     trend_15m = _gen._get_trend(df_15m)
-                    _ema12_15 = df_15m["Close"].ewm(span=12, adjust=False).mean()
-                    _ema26_15 = df_15m["Close"].ewm(span=26, adjust=False).mean()
-                    _macd15_bull = (_ema12_15.iloc[-1] - _ema26_15.iloc[-1]) > 0
+                    _ema12_15 = df_15m["Close"].ewm(
+                        span=12, adjust=False).mean()
+                    _ema26_15 = df_15m["Close"].ewm(
+                        span=26, adjust=False).mean()
+                    _macd15_bull = (
+                        _ema12_15.iloc[-1] - _ema26_15.iloc[-1]) > 0
                     trend_15m_label = trend_15m.replace("_", " ").title()
                     if trend_15m in ("UPTREND", "UPTREND_WEAK") and trend in ("BULLISH", "UPTREND_WEAK"):
                         conf_score += 10
-                        conf_reasons.append(f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
+                        conf_reasons.append(
+                            f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
                     elif trend_15m in ("DOWNTREND", "DOWNTREND_WEAK") and trend in ("BEARISH", "DOWNTREND_WEAK"):
                         conf_score += 10
-                        conf_reasons.append(f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
+                        conf_reasons.append(
+                            f"\u2705 Konfirmasi 15m: {trend_15m_label} \u2014 aligned (+10)")
                     elif trend_15m in ("UPTREND", "UPTREND_WEAK") and trend in ("BEARISH", "DOWNTREND_WEAK"):
                         conf_score -= 8
-                        conf_reasons.append(f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bearish (-8)")
+                        conf_reasons.append(
+                            f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bearish (-8)")
                     elif trend_15m in ("DOWNTREND", "DOWNTREND_WEAK") and trend in ("BULLISH", "UPTREND_WEAK"):
                         conf_score -= 8
-                        conf_reasons.append(f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bullish (-8)")
+                        conf_reasons.append(
+                            f"\u26a0\ufe0f Kontratren 15m: {trend_15m_label} vs 5m bullish (-8)")
                     else:
-                        conf_reasons.append(f"\u2194\ufe0f Konfirmasi 15m: {trend_15m_label} (sideways/netral)")
+                        conf_reasons.append(
+                            f"\u2194\ufe0f Konfirmasi 15m: {trend_15m_label} (sideways/netral)")
                     result["trend_15m"] = trend_15m
                 except Exception:
                     pass

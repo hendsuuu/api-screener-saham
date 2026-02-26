@@ -49,3 +49,5 @@ node_modules/
 
 # Git
 .git/
+
+.server.pid

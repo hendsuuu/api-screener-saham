@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import time
 
 from data.store import get_store
+from network.yf_client import get_yf_client
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ class StockDataFetcher:
             self.store = get_store()
         except Exception:
             self.store = None
+        # YFClient: proxy-aware, retry-enabled yfinance wrapper
+        try:
+            self.yf = get_yf_client()
+        except Exception:
+            self.yf = None
 
     def _is_cache_valid(self, ticker: str) -> bool:
         if ticker not in self.cache_time:
@@ -74,13 +80,21 @@ class StockDataFetcher:
         last_error: Optional[Exception] = None
         for attempt in range(1, 4):
             try:
-                stock = yf.Ticker(ticker)
-                df = stock.history(period=period, interval=interval)
+                # Pakai YFClient jika tersedia (proxy + rate limiter)
+                if self.yf is not None:
+                    df = self.yf.history(ticker, period=period, interval=interval)
+                else:
+                    stock = yf.Ticker(ticker)
+                    df = stock.history(period=period, interval=interval)
 
                 if df is None or df.empty:
                     # Coba fallback period lebih panjang agar indikator bisa dihitung
                     if attempt == 1 and period == "5d":
-                        df = stock.history(period="1mo", interval=interval)
+                        if self.yf is not None:
+                            df = self.yf.history(ticker, period="1mo", interval=interval)
+                        else:
+                            stock = yf.Ticker(ticker)
+                            df = stock.history(period="1mo", interval=interval)
                     if df is None or df.empty:
                         logger.debug(
                             f"Tidak ada data untuk {ticker} (attempt {attempt})")
@@ -142,8 +156,11 @@ class StockDataFetcher:
         last_error: Optional[Exception] = None
         for attempt in range(1, 3):
             try:
-                stock = yf.Ticker(ticker)
-                df = stock.history(period=period, interval=interval)
+                if self.yf is not None:
+                    df = self.yf.history(ticker, period=period, interval=interval)
+                else:
+                    stock = yf.Ticker(ticker)
+                    df = stock.history(period=period, interval=interval)
 
                 if df is None or df.empty:
                     if attempt < 2:

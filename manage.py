@@ -1,4 +1,4 @@
-"""
+﻿"""
 manage.py — CLI untuk kontrol server IDX Scalper Bot dari terminal / VPS.
 
 Cara pakai:
@@ -119,7 +119,7 @@ def _stop_pid(pid: int, timeout: int = 10) -> bool:
         return False
 
 
-def _api_call(path: str, method: str = "GET", payload: dict | None = None):
+def _api_call(path: str, method: str = "GET", payload: dict | None = None, timeout: int = 30):
     """Helper sederhana untuk memanggil API lokal."""
     try:
         import requests
@@ -129,12 +129,12 @@ def _api_call(path: str, method: str = "GET", payload: dict | None = None):
         url = f"{base}{path}"
         if method.upper() == "POST":
             r = requests.post(url, json=payload or {},
-                              headers=headers, timeout=30)
+                              headers=headers, timeout=timeout)
         elif method.upper() == "GET":
-            r = requests.get(url, headers=headers, timeout=30)
+            r = requests.get(url, headers=headers, timeout=timeout)
         else:
             r = requests.request(method, url, json=payload,
-                                 headers=headers, timeout=30)
+                                 headers=headers, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except ImportError:
@@ -285,8 +285,8 @@ def cmd_scan(args):
 
 def cmd_prescreen(args):
     """Jalankan pre-screener via API."""
-    print("  [*] Menjalankan pre-screener ...")
-    result = _api_call("/prescreen/run", method="POST")
+    print("  [*] Menjalankan pre-screener (mungkin 1-3 menit) ...")
+    result = _api_call("/prescreen/run", method="POST", timeout=180)
     if result:
         print(f"  [✓] Pre-screener selesai:")
         print(json.dumps(result, indent=4, ensure_ascii=False))
@@ -427,12 +427,15 @@ def cmd_get_data(args):
         t0 = time.time()
 
         result = crawler.update_latest(tickers, interval="5m", workers=workers)
-        result_15 = crawler.update_latest(tickers, interval="15m", workers=workers)
+        result_15 = crawler.update_latest(
+            tickers, interval="15m", workers=workers)
         elapsed = time.time() - t0
 
         print(f"\n  [✓] Update selesai ({elapsed:.0f}s)")
-        print(f"  [i] 5m  — Diperbarui: {result['updated']} | Skip: {result['skipped']} | Gagal: {result['failed']} | +{result['new_rows']} baris")
-        print(f"  [i] 15m — Diperbarui: {result_15['updated']} | Skip: {result_15['skipped']} | Gagal: {result_15['failed']} | +{result_15['new_rows']} baris")
+        print(
+            f"  [i] 5m  — Diperbarui: {result['updated']} | Skip: {result['skipped']} | Gagal: {result['failed']} | +{result['new_rows']} baris")
+        print(
+            f"  [i] 15m — Diperbarui: {result_15['updated']} | Skip: {result_15['skipped']} | Gagal: {result_15['failed']} | +{result_15['new_rows']} baris")
         if result.get('errors'):
             print(f"  [!] Errors 5m : {', '.join(result['errors'][:5])}")
         if result_15.get('errors'):
@@ -533,9 +536,11 @@ def cmd_get_data(args):
             print(f"  [!] Contoh error: {result_intra['errors'][0]}")
     if interval in ("15m", "all"):
         print(f"\n  \u2554{'═'*43}\u2557")
-        print(f"  \u2551  CRAWL INTRADAY 15 MENIT ({period_intraday})       \u2551")
+        print(
+            f"  \u2551  CRAWL INTRADAY 15 MENIT ({period_intraday})       \u2551")
         print(f"  \u2560{'═'*43}\u2563")
-        print(f"  \u2551  Saham   : {len(tickers):>6}                   \u2551")
+        print(
+            f"  \u2551  Saham   : {len(tickers):>6}                   \u2551")
         print(f"  \u2551  Period  : {period_intraday:<30} \u2551")
         print(f"  \u2551  Workers : {workers:<30} \u2551")
         print(f"  \u255a{'═'*43}\u255d")
@@ -548,7 +553,8 @@ def cmd_get_data(args):
 
         t0 = time.time()
         if _has_tqdm:
-            pbar15 = _tqdm(total=len(tickers), unit="saham", desc="Intraday 15m")
+            pbar15 = _tqdm(total=len(tickers), unit="saham",
+                           desc="Intraday 15m")
 
             def _cb_intra15_tqdm(done, total, ticker):
                 pbar15.update(1)
@@ -578,10 +584,66 @@ def cmd_get_data(args):
     except Exception as e:
         print(f"  [!] Gagal baca store stats: {e}")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PROXY COMMANDS
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ARGUMENT PARSER
-# ─────────────────────────────────────────────────────────────────────────────
+
+def cmd_proxy(args):
+    """
+    Manajemen proxy layer.
+
+    proxy status  — tampilkan status proxy manager + rate limiter
+    proxy test    — test koneksi proxy aktif
+    proxy rotate  — paksa rotasi ke proxy berikutnya
+    """
+    subcmd = getattr(args, "subcmd", "status")
+
+    try:
+        from network.proxy_manager import get_proxy_manager
+        from network.rate_limiter import get_rate_limiter
+    except ImportError as e:
+        print(f"  [!] Modul network tidak tersedia: {e}")
+        return
+
+    pm = get_proxy_manager()
+    limiter = get_rate_limiter()
+
+    if subcmd == "status":
+        pm_status = pm.status()
+        lim_status = limiter.status()
+        print("\n  ── Proxy Manager ──────────────────────")
+        for k, v in pm_status.items():
+            print(f"    {k:<30} {v}")
+        print("\n  ── Rate Limiter ───────────────────────")
+        for k, v in lim_status.items():
+            print(f"    {k:<30} {v}")
+        print()
+
+    elif subcmd == "test":
+        from network.yf_client import get_yf_client
+        print("  Menguji koneksi yfinance via proxy...")
+        try:
+            client = get_yf_client()
+            df = client.history("BBCA.JK", period="5d", interval="1d")
+            if df is not None and not df.empty:
+                print(f"  [✓] Berhasil — {len(df)} baris data BBCA.JK")
+            else:
+                print("  [✗] Koneksi OK tapi data kosong")
+        except Exception as e:
+            print(f"  [✗] Error: {e}")
+
+    elif subcmd == "rotate":
+        current = pm.get_proxy()
+        if current:
+            pm.rotate()
+            new_proxy = pm.get_proxy()
+            print(f"  [✓] Rotasi: {pm._mask(current)} → {pm._mask(new_proxy) if new_proxy else 'direct'}")
+        else:
+            print("  [!] Proxy mode off atau tidak ada proxy terkonfigurasi")
+
+    else:
+        print(f"  [!] Subcommand tidak dikenal: {subcmd}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -704,6 +766,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Mode incremental: hanya ambil candle terbaru (cocok untuk cron / cek manual)"
     )
     p_get.set_defaults(func=cmd_get_data)
+
+    # ── proxy ──────────────────────────────────────────────────────────────────
+    p_proxy = sub.add_parser("proxy", help="Manajemen proxy & rate limiter")
+    proxy_sub = p_proxy.add_subparsers(dest="subcmd", metavar="<subcmd>")
+    proxy_sub.required = True
+
+    p_proxy_status = proxy_sub.add_parser(
+        "status", help="Status proxy manager + rate limiter")
+    p_proxy_status.set_defaults(func=cmd_proxy, subcmd="status")
+
+    p_proxy_test = proxy_sub.add_parser(
+        "test", help="Test koneksi proxy aktif (fetch BBCA.JK)")
+    p_proxy_test.set_defaults(func=cmd_proxy, subcmd="test")
+
+    p_proxy_rotate = proxy_sub.add_parser(
+        "rotate", help="Paksa rotasi ke proxy berikutnya")
+    p_proxy_rotate.set_defaults(func=cmd_proxy, subcmd="rotate")
 
     return parser
 

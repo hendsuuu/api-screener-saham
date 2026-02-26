@@ -23,6 +23,8 @@ Dilengkapi persistent OHLCV database (Parquet), crawling historis, structured er
 | 💾 Signal Cache   | Sinyal tersimpan JSON per hari — `/buy` & `/waspada` aktif setelah restart |
 | 🖥️ CLI Management | `manage.py` untuk kontrol VPS: start/stop/status/get-data/scan/store       |
 | 🔐 Admin Commands | Command pribadi via Telegram khusus pemilik bot                            |
+| 🌍 Proxy System   | Pool proxy rotatif + fallback direct — bypass rate-limit Yahoo Finance     |
+| ⚡ Rate Limiter   | Adaptive delay antar request — otomatis melambat saat 429, pulih saat OK   |
 | 📋 Error Logging  | Structured JSON log per request gagal + API `/errors/recent`               |
 
 ---
@@ -144,6 +146,11 @@ python manage.py store delete BBCA [--interval 5m]
 
 # ── Bot Saja ─────────────────────────────────────────────
 python manage.py bot
+
+# ── Proxy & Rate Limiter ──────────────────────────────────
+python manage.py proxy status      # Status proxy aktif + statistik rate limiter
+python manage.py proxy test        # Test koneksi — fetch BBCA.JK via proxy
+python manage.py proxy rotate      # Paksa rotasi ke proxy berikutnya
 ```
 
 ---
@@ -372,6 +379,12 @@ api_saham/
 │   ├── indicators.py          # EMA, RSI, MACD, BB, ATR, ADX, dll
 │   └── signal_generator.py    # Kalkulasi sinyal BUY/WASPADA + scoring
 │
+├── network/
+│   ├── proxy_manager.py       # Pool proxy rotatif + health-check + blacklist
+│   ├── rate_limiter.py        # Adaptive delay (naik saat error, turun saat OK)
+│   ├── retry_policy.py        # Retry dengan exponential backoff
+│   └── yf_client.py           # yfinance client dengan session proxy
+│
 ├── telegram_bot/
 │   ├── bot.py                 # Handler semua command Telegram
 │   ├── formatter.py           # Format pesan HTML untuk Telegram
@@ -447,6 +460,97 @@ CRAWL_INTRADAY_PERIOD=60d     # Periode intraday 5m (max 60d)
 CRAWL_WORKERS=4               # Thread paralel
 CRAWL_BATCH_SIZE=20           # Saham per batch yf.download
 CRAWL_DELAY_SECONDS=0.5       # Jeda antar batch (detik)
+CRAWL_SHUFFLE_TICKERS=true    # Acak urutan ticker tiap crawl
+CRAWL_DELAY_JITTER=0.25       # Jitter tambahan per batch (0..x detik)
+
+# ── Proxy System ──────────────────────────────────────────────────────────
+# Mode: off (tanpa proxy) | single (satu proxy tetap) | rotate (pool rotatif)
+PROXY_MODE=off
+
+# Proxy tunggal — dipakai jika PROXY_MODE=single
+# Format: http://user:pass@ip:port  atau  socks5://ip:port
+PROXY_URL=
+
+# File daftar proxy — dipakai jika PROXY_MODE=rotate
+# Satu baris per proxy: http://user:pass@ip:port
+PROXY_LIST_PATH=data/proxies.txt
+
+PROXY_TIMEOUT=12              # Timeout per request (detik)
+PROXY_MAX_RETRY=3             # Max retry sebelum rotasi
+PROXY_ROTATE_ON_ERROR=true    # Rotasi otomatis saat error
+PROXY_FALLBACK_DIRECT=true    # Fallback koneksi langsung jika semua proxy gagal
+PROXY_COOLDOWN_SECONDS=1200   # Blacklist proxy gagal selama N detik (20 menit)
+PROXY_HEALTHCHECK_URL=https://query1.finance.yahoo.com
+
+# ── Adaptive Rate Limiter ─────────────────────────────────────────────────
+YF_BASE_DELAY=0.3             # Delay awal antar request (detik)
+YF_MAX_DELAY=3.0              # Delay maksimum adaptif
+YF_SUCCESS_DECAY=0.05         # Seberapa cepat delay turun saat sukses
+YF_ERROR_BOOST=0.35           # Boost delay saat error umum
+YF_429_EXTRA_BOOST=0.8        # Boost extra saat HTTP 429 (rate-limit)
+YF_ERROR_WINDOW=30            # Window N request untuk hitung error rate
+```
+
+---
+
+## 🌍 Proxy System
+
+Sistem proxy terintegrasi dengan seluruh request ke Yahoo Finance — baik saat crawl historis, update incremental, maupun scan live.
+
+### Mode Operasi
+
+| Mode | Keterangan |
+|---|---|
+| `off` | Koneksi langsung (default) |
+| `single` | Satu proxy tetap via `PROXY_URL` |
+| `rotate` | Pool dari `data/proxies.txt`, rotasi otomatis saat error |
+
+### Konfigurasi Cepat
+
+**Mode single proxy:**
+```env
+PROXY_MODE=single
+PROXY_URL=http://user:pass@123.45.67.89:8080
+```
+
+**Mode rotate (pool):**
+```env
+PROXY_MODE=rotate
+PROXY_LIST_PATH=data/proxies.txt
+```
+
+`data/proxies.txt` — satu baris per proxy:
+```
+http://user:pass@1.2.3.4:8080
+http://user:pass@5.6.7.8:3128
+socks5://user:pass@9.10.11.12:1080
+```
+
+### Fitur Proxy
+
+- **Auto-rotate** — ganti proxy otomatis saat koneksi gagal atau timeout  
+- **Blacklist sementara** — proxy gagal didinginkan selama `PROXY_COOLDOWN_SECONDS` (default 20 menit)  
+- **Fallback direct** — jika semua proxy gagal dan `PROXY_FALLBACK_DIRECT=true`, lanjut tanpa proxy  
+- **Health-check** — setiap proxy diverifikasi sebelum digunakan  
+
+### Adaptive Rate Limiter
+
+Delay antar request ke Yahoo Finance diatur secara adaptif:
+- **Naik** saat ada error atau HTTP 429  
+- **Turun perlahan** saat request berhasil  
+- Mencegah ban/rate-limit tanpa mengorbankan kecepatan saat kondisi normal
+
+```bash
+# Monitor status real-time
+python manage.py proxy status
+
+# Output contoh:
+#   mode                   rotate
+#   active_proxy           http://***:8080
+#   pool_size              5
+#   blacklisted            1
+#   current_delay_s        0.42
+#   error_rate_30req       6.7%
 ```
 
 ---

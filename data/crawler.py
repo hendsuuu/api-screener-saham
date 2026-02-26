@@ -37,11 +37,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
+import random
+
 import pandas as pd
 import yfinance as yf
 
 from data.store import DataStore, get_store
 from data.stock_list import IDX_UNIVERSE, get_yahoo_symbol
+from network.yf_client import get_yf_client
+from network.rate_limiter import get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +214,16 @@ class DataCrawler:
         self.store = store or get_store()
         self.workers = workers
         self.batch_size = batch_size
-        self.delay_seconds = delay_seconds
+        self.delay_seconds = delay_seconds  # kept for backward compat
+        # Network / rate-limit layer
+        try:
+            self.yf = get_yf_client()
+        except Exception:
+            self.yf = None
+        try:
+            self.limiter = get_rate_limiter()
+        except Exception:
+            self.limiter = None
 
     # ─── Crawl historis harian ─────────────────────────────────────────────
 
@@ -245,8 +258,26 @@ class DataCrawler:
         _status.start(total=len(tickers_raw),
                       label=f"historical-{interval}-{period}")
 
+        # Opsional: acak urutan ticker agar pola request tidak terdeteksi
+        try:
+            from config import settings as _s
+            _shuffle = getattr(_s, 'CRAWL_SHUFFLE_TICKERS', True)
+        except Exception:
+            _shuffle = True
+        if _shuffle:
+            combined = list(zip(tickers_raw, _yf_tickers(tickers_raw)))
+            random.shuffle(combined)
+            if combined:
+                tickers_raw, yf_tickers_shuffled = zip(*combined)
+                tickers_raw = list(tickers_raw)
+                yf_tickers_list = list(yf_tickers_shuffled)
+            else:
+                yf_tickers_list = _yf_tickers(tickers_raw)
+        else:
+            yf_tickers_list = _yf_tickers(tickers_raw)
+
         # Bagi menjadi batch
-        yf_tickers = _yf_tickers(tickers_raw)
+        yf_tickers = yf_tickers_list
         batches: List[Tuple[List[str], List[str]]] = []
         for i in range(0, len(tickers_raw), self.batch_size):
             raw_batch = tickers_raw[i:i + self.batch_size]
@@ -267,13 +298,22 @@ class DataCrawler:
             try:
                 # yfinance 1.2.0: TIDAK pakai group_by; MultiIndex sekarang
                 # (Price, Ticker) — level 0 = tipe harga, level 1 = ticker
-                raw = yf.download(
-                    tickers=yf_batch,
-                    period=period,
-                    interval=interval,
-                    auto_adjust=True,
-                    progress=False,
-                )
+                if self.yf is not None:
+                    raw = self.yf.download(
+                        yf_batch,
+                        period=period,
+                        interval=interval,
+                        auto_adjust=True,
+                        progress=False,
+                    )
+                else:
+                    raw = yf.download(
+                        tickers=yf_batch,
+                        period=period,
+                        interval=interval,
+                        auto_adjust=True,
+                        progress=False,
+                    )
             except Exception as e:
                 logger.warning(f"[Crawler] Batch download error: {e}")
                 raw = None  # Fallback ke per-ticker di bawah
@@ -351,7 +391,11 @@ class DataCrawler:
             if progress_cb:
                 progress_cb(processed, len(tickers_raw), batch_label)
 
-            time.sleep(self.delay_seconds)
+            # Rate limiter: adaptive delay; fallback ke self.delay_seconds
+            if self.limiter is not None:
+                self.limiter.wait_sync()
+            else:
+                time.sleep(self.delay_seconds)
 
         _status.finish()
         result = {
@@ -586,42 +630,62 @@ class DataCrawler:
         Returns:
             (ok: bool, error_message: Optional[str])
         """
-        last_err: Optional[str] = None
-        for attempt in range(1, retries + 1):
-            try:
-                stock = yf.Ticker(yf_ticker)
-                df = stock.history(
-                    period=period, interval=interval, auto_adjust=True)
-
-                if df is None or df.empty:
-                    if attempt < retries:
-                        time.sleep(1.0 * attempt)
-                        continue
-                    return False, "empty_data"
-
-                df = _clean_df(df)
-                if df is None:
-                    return False, "empty_after_clean"
-
-                self.store.upsert(raw_ticker, interval, df)
-                return True, None
-
-            except Exception as e:
-                last_err = str(e)
-                logger.debug(
-                    f"[Crawler] {raw_ticker} attempt {attempt}/{retries}: {e}")
-                if attempt < retries:
-                    time.sleep(1.5 * attempt)
-
-        # Log ke error tracker jika tersedia
         try:
-            from logs.error_tracker import tracker
-            tracker.track(
-                raw_ticker, f"yfinance.{interval}", last_err or "unknown")
-        except Exception:
-            pass
+            # YFClient menangani retry + proxy + rate limiter secara internal
+            if self.yf is not None:
+                df = self.yf.history(
+                    yf_ticker, period=period, interval=interval,
+                    auto_adjust=True)
+            else:
+                # Fallback tanpa YFClient
+                last_err: Optional[str] = None
+                for attempt in range(1, retries + 1):
+                    try:
+                        stock = yf.Ticker(yf_ticker)
+                        df = stock.history(
+                            period=period, interval=interval,
+                            auto_adjust=True)
+                        if df is not None and not df.empty:
+                            break
+                        if attempt < retries:
+                            time.sleep(1.0 * attempt)
+                    except Exception as ex:
+                        last_err = str(ex)
+                        if attempt < retries:
+                            time.sleep(1.5 * attempt)
+                        df = None
+                else:
+                    # Log ke error tracker jika tersedia
+                    try:
+                        from logs.error_tracker import tracker
+                        tracker.track(
+                            raw_ticker,
+                            f"yfinance.{interval}",
+                            last_err or "unknown")
+                    except Exception:
+                        pass
+                    return False, last_err
 
-        return False, last_err
+            if df is None or df.empty:
+                return False, "empty_data"
+
+            df = _clean_df(df)
+            if df is None:
+                return False, "empty_after_clean"
+
+            self.store.upsert(raw_ticker, interval, df)
+            return True, None
+
+        except Exception as e:
+            err_msg = str(e)
+            logger.debug(f"[Crawler] {raw_ticker}: {err_msg}")
+            # Log ke error tracker jika tersedia
+            try:
+                from logs.error_tracker import tracker
+                tracker.track(raw_ticker, f"yfinance.{interval}", err_msg)
+            except Exception:
+                pass
+            return False, err_msg
 
 
 # ─── Progress summary ──────────────────────────────────────────────────────────

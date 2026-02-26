@@ -509,8 +509,8 @@ Contoh: /signal BBCA</i>
 • 04:00 WIB — Update data candle terbaru (otomatis)
 • 06:00 WIB — Kirim max 10 BUY + 10 WASPADA (otomatis)
 • 09:00 WIB — Notif pasar buka
-• 14:45 WIB — Reminder pre-close
-• 15:05 WIB — Notif pasar tutup
+• 15:45 WIB — Reminder pre-close
+• 16:00 WIB — Notif pasar tutup
 
 <b>📊 INDIKATOR YANG DIGUNAKAN:</b>
 RSI(9) • MACD(12/26/9) • Bollinger Bands • VWAP

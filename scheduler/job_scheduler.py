@@ -39,7 +39,7 @@ WIB = pytz.timezone("Asia/Jakarta")
 #  Limit sinyal harian
 MAX_BUY_PER_DAY = 10   # Maksimal sinyal BUY yang dikirim setiap pagi
 MAX_WASPADA_PER_DAY = 10  # Maksimal sinyal WASPADA yang dikirim setiap pagi
-MIN_SCORE = 60   # Confidence minimum (%)
+MIN_SCORE = 50   # Confidence minimum (%)
 
 
 class ScanScheduler:
