@@ -107,7 +107,8 @@ class YFClient:
                     self.proxy_manager.timeout
                     if proxy else _SOCKET_TIMEOUT
                 )
-                session = _build_session(proxy, self.impersonate, timeout=_sess_timeout)
+                session = _build_session(
+                    proxy, self.impersonate, timeout=_sess_timeout)
                 if session is not None:
                     kwargs["session"] = session
 
@@ -165,7 +166,8 @@ class YFClient:
                     self.proxy_manager.timeout
                     if proxy else _SOCKET_TIMEOUT
                 )
-                session = _build_session(proxy, self.impersonate, timeout=_sess_timeout)
+                session = _build_session(
+                    proxy, self.impersonate, timeout=_sess_timeout)
                 if session is not None:
                     stock = yf.Ticker(ticker, session=session)
                 else:

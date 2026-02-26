@@ -442,7 +442,8 @@ class DataCrawler:
                     _TICKER_FAIL_THRESHOLD = 3  # 3 ticker gagal berturut → stop
                     for raw_ticker, yf_ticker in zip(raw_batch, yf_batch):
                         if _ip_blocked:
-                            _status.tick(raw_ticker, ok=False, error=_block_msg)
+                            _status.tick(raw_ticker, ok=False,
+                                         error=_block_msg)
                             total_failed += 1
                             continue
                         ok, err = self._fetch_single(
