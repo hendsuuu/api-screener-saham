@@ -208,7 +208,8 @@ def _build_session(proxy: Optional[str], impersonate: str = "chrome110"):
         return None
     try:
         from curl_cffi import requests as curl_req  # type: ignore
-        session = curl_req.Session(impersonate=impersonate, timeout=_SOCKET_TIMEOUT)
+        session = curl_req.Session(
+            impersonate=impersonate, timeout=_SOCKET_TIMEOUT)
         session.proxies = _build_proxies(proxy)
         return session
     except ImportError:
@@ -223,6 +224,7 @@ def _build_session(proxy: Optional[str], impersonate: str = "chrome110"):
 
         class _TimeoutAdapter(HTTPAdapter):
             """HTTPAdapter yang memaksa timeout di setiap request."""
+
             def send(self, *args, **kwargs):
                 kwargs.setdefault("timeout", _SOCKET_TIMEOUT)
                 return super().send(*args, **kwargs)
