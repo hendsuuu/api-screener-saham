@@ -52,6 +52,15 @@ class ProxyManager:
         self._stats: Dict[str, Dict] = {}        # proxy → {ok, fail, ...}
         self._consecutive_failures: Dict[str, int] = {}
 
+        # ── Circuit breaker: fallback direct ketika semua proxy mati ──
+        # Jika N kegagalan GLOBAL berturut-turut (bukan per-proxy),
+        # langsung return None (direct connection) selama cooldown.
+        # Ini mencegah scan macet berjam-jam iterasi 1059 proxy mati.
+        self._CIRCUIT_THRESHOLD: int = 5     # 5 kegagalan global → open
+        self._CIRCUIT_COOLDOWN: int = 300    # 5 menit fallback direct
+        self._global_consecutive_fail: int = 0
+        self._circuit_open_until: float = 0  # unix timestamp
+
         self._load()
 
     # ─── Public API ───────────────────────────────────────────────────────────
@@ -64,6 +73,9 @@ class ProxyManager:
             return self.proxy_url or None
         # rotate
         with self._lock:
+            # Circuit breaker: terlalu banyak kegagalan global → direct
+            if time.time() < self._circuit_open_until:
+                return None
             return self._current_proxy()
 
     def rotate(self) -> Optional[str]:
@@ -85,6 +97,9 @@ class ProxyManager:
             s["ok"] += 1
             s["last_ok_ts"] = time.time()
             self._consecutive_failures[proxy] = 0
+            # Proxy bekerja → reset circuit breaker
+            self._global_consecutive_fail = 0
+            self._circuit_open_until = 0
 
     def report_failure(self, proxy: Optional[str], error: Exception) -> None:
         if not proxy:
@@ -129,6 +144,19 @@ class ProxyManager:
                     self._log_event("proxy_rotate", proxy, new_p,
                                     reason="HTTP_429" if is_429 else "ERROR")
 
+            # ── Circuit breaker global ─────────────────────────────
+            self._global_consecutive_fail += 1
+            if self._global_consecutive_fail >= self._CIRCUIT_THRESHOLD:
+                self._circuit_open_until = time.time() + self._CIRCUIT_COOLDOWN
+                logger.warning(
+                    f"[proxy] Circuit breaker OPEN: "
+                    f"{self._global_consecutive_fail} kegagalan berturut → "
+                    f"fallback direct {self._CIRCUIT_COOLDOWN}s"
+                )
+                self._log_event(
+                    "circuit_open", proxy,
+                    reason=f"global_fail={self._global_consecutive_fail}")
+
     def health_check(self, proxy: str) -> bool:
         """Return True if proxy can reach healthcheck_url within timeout."""
         try:
@@ -148,11 +176,22 @@ class ProxyManager:
             bl_count = sum(
                 1 for exp in self._blacklist.values() if exp > time.time()
             )
+            circuit_open = time.time() < self._circuit_open_until
+            circuit_remaining = (
+                int(self._circuit_open_until - time.time())
+                if circuit_open else 0
+            )
             return {
                 "mode": self.mode,
                 "active_proxy": _mask(active) if active else None,
                 "total_proxies": len(self._proxies),
                 "blacklisted": bl_count,
+                "circuit_breaker": {
+                    "open": circuit_open,
+                    "global_fail_count": self._global_consecutive_fail,
+                    "threshold": self._CIRCUIT_THRESHOLD,
+                    "remaining_seconds": circuit_remaining,
+                },
                 "stats": {
                     _mask(k): v for k, v in self._stats.items()
                 },

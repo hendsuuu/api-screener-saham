@@ -139,6 +139,35 @@ class StockDataFetcher:
 
         logger.warning(
             f"Gagal ambil data {ticker} setelah 3 percobaan: {last_error}")
+
+        # ── Final fallback: koneksi DIRECT tanpa proxy ──────────────
+        # Jika YFClient (proxy) selalu gagal, coba langsung tanpa proxy.
+        # Pre-screener membuktikan yf.download() direct masih bisa jalan.
+        try:
+            stock = yf.Ticker(ticker)
+            df = stock.history(
+                period=period, interval=interval, auto_adjust=True)
+            if df is not None and not df.empty:
+                df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                df.index = pd.to_datetime(df.index)
+                _keep = [c for c in ["Open", "High", "Low",
+                                     "Close", "Volume"] if c in df.columns]
+                df = df[_keep]
+                if not df.empty:
+                    logger.info(
+                        f"[DIRECT] {ticker}: {len(df)} candle "
+                        f"(fallback direct berhasil)")
+                    self.session_cache[cache_key] = df
+                    self.cache_time[cache_key] = datetime.now()
+                    if self.store is not None:
+                        try:
+                            self.store.upsert(ticker, interval, df)
+                        except Exception:
+                            pass
+                    return df
+        except Exception as de:
+            logger.debug(f"[DIRECT] {ticker}: fallback direct gagal: {de}")
+
         return None
 
     def get_daily_data(

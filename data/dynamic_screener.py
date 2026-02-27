@@ -76,31 +76,30 @@ class ScreenerCriteria:
         saham sudah naik jauh  entry lebih baik, reward lebih besar.
     """
     # ── Rentang harga (IDX sweet-spot scalping) ──
-    min_price: float = 100.0
-    """Harga minimum Rp 100 — hindari penny-stock & saham sub-gocap."""
+    min_price: float = 50.0
+    """Harga minimum Rp 50 — hindari saham sub-gocap."""
 
-    max_price: Optional[float] = 10_000.0
-    """Harga maksimum Rp 10.000 — hindari saham ultra-high-price dengan
-    spread absolut besar yang memakan profit scalping."""
+    max_price: Optional[float] = None
+    """Harga maksimum: None = tidak ada batas atas.
+    Biarkan saham mid/large-cap masuk agar pool lebih besar."""
 
     # ── Likuiditas (pastikan bisa masuk & keluar cepat) ──
-    min_volume_ma5: float = 3_000_000.0
-    """Volume rata-rata 5 hari >= 3 juta lembar/hari.
-    Lebih rendah dari versi lama agar saham mid-cap yang liquid masuk."""
+    min_volume_ma5: float = 1_000_000.0
+    """Volume rata-rata 5 hari >= 1 juta lembar/hari.
+    Lebih longgar agar mid-cap liquid juga masuk."""
 
-    min_value_ma5: float = 5_000_000_000.0
-    """Nilai transaksi rata-rata 5 hari >= Rp 5 miliar/hari.
-    Filter utama likuiditas — uang yang benar-benar berputar."""
+    min_value_ma5: float = 1_000_000_000.0
+    """Nilai transaksi rata-rata 5 hari >= Rp 1 miliar/hari.
+    Cukup rendah agar filter ini hanya buang saham benar-benar sepi."""
 
     # ── Momentum (tangkap pergerakan awal) ──
-    min_price_change_pct: float = 0.5
-    """|Perubahan harga 1 hari| >= 0.5 %.
-    Rendah agar pre-breakout & early-mover tertangkap.
-    Pakai nilai absolut  saham turun pun bisa jadi kandidat WASPADA."""
+    min_price_change_pct: float = 0.0
+    """|Perubahan harga 1 hari| >= 0%. 
+    Dinonaktifkan agar semua saham liquid masuk analisis teknikal."""
 
-    min_vol_surge_pct: float = 15.0
-    """Volume hari ini >= 15 % di atas rata-rata MA5 (ratio >= 1.15).
-    Menandakan ada aktivitas tidak biasa / akumulasi diam-diam."""
+    min_vol_surge_pct: float = 0.0
+    """Volume surge filter dinonaktifkan (0%).
+    Biarkan analisis teknikal yang menilai volume di tahap 2."""
 
     # ── EMA cross filter (konfirmasi trend intraday) ──
     require_ema_alignment: bool = False

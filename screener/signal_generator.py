@@ -100,10 +100,10 @@ class SignalGenerator:
             "tp3_pct": 3.5,     # TP3: +3.5%
             "sl_pct": 1.0,      # SL default: -1%
             "sl_atr_mult": 1.5,  # SL = 1.5x ATR (dinamis)
-            "min_rr": 2.0,      # Minimum Risk:Reward 1:2
-            "min_volume_ratio": 1.2,  # Minimal volume 1.2x rata-rata
-            "rsi_oversold": 35,
-            "rsi_overbought": 65,
+            "min_rr": 1.5,      # Minimum Risk:Reward 1:1.5 (lebih realistis)
+            "min_volume_ratio": 0.0,  # Tidak ada filter volume di sini
+            "rsi_oversold": 30,
+            "rsi_overbought": 70,
         }
 
     def _calculate_support_resistance(
@@ -195,25 +195,31 @@ class SignalGenerator:
 
         # 3. RSI (20 poin)
         if signal_type == "BUY":
-            if 30 <= rsi <= 55:
+            if 25 <= rsi <= 55:
                 score += 20
-                reasons.append(f"✅ RSI {rsi:.1f} - zona beli ideal (30-55)")
-            elif rsi < 30:
+                reasons.append(f"✅ RSI {rsi:.1f} - zona beli ideal (25-55)")
+            elif rsi < 25:
                 score += 15
                 reasons.append(f"✅ RSI {rsi:.1f} - oversold (peluang rebound)")
-            elif rsi <= 65:
+            elif rsi <= 70:
                 score += 10
+                reasons.append(f"⚠️ RSI {rsi:.1f} - momentum masih ada")
+            elif rsi <= 80:
+                score += 5
                 reasons.append(f"⚠️ RSI {rsi:.1f} - mendekati overbought")
             else:
-                reasons.append(f"🚫 RSI {rsi:.1f} - overbought, hindari beli")
+                reasons.append(f"🚫 RSI {rsi:.1f} - overbought, hati-hati")
         else:
-            if 45 <= rsi <= 70:
+            if 45 <= rsi <= 75:
                 score += 20
                 reasons.append(f"✅ RSI {rsi:.1f} - zona jual ideal")
-            elif rsi > 70:
+            elif rsi > 75:
                 score += 15
                 reasons.append(
                     f"✅ RSI {rsi:.1f} - overbought (peluang koreksi)")
+            elif rsi >= 30:
+                score += 10
+                reasons.append(f"⚠️ RSI {rsi:.1f} - masih bisa turun")
 
         # 4. Volume (15 poin)
         if vol_ratio >= 2.0:
@@ -221,28 +227,33 @@ class SignalGenerator:
             reasons.append(
                 f"✅ Volume {vol_ratio:.1f}x rata-rata - momentum sangat kuat")
         elif vol_ratio >= 1.5:
-            score += 10
+            score += 12
             reasons.append(
                 f"✅ Volume {vol_ratio:.1f}x rata-rata - konfirmasi kuat")
-        elif vol_ratio >= 1.2:
-            score += 6
-            reasons.append(f"⚠️ Volume {vol_ratio:.1f}x rata-rata - cukup")
+        elif vol_ratio >= 1.0:
+            score += 8
+            reasons.append(f"✅ Volume {vol_ratio:.1f}x rata-rata - normal")
+        elif vol_ratio >= 0.5:
+            score += 4
+            reasons.append(
+                f"⚠️ Volume {vol_ratio:.1f}x rata-rata - agak rendah")
         else:
             reasons.append(
-                f"🚫 Volume {vol_ratio:.1f}x rata-rata - lemah, waspada")
+                f"⚠️ Volume {vol_ratio:.1f}x rata-rata - rendah")
 
         # 5. ADX strength (10 poin)
-        if adx_val >= 40:
+        if adx_val >= 35:
             score += 10
             reasons.append(f"✅ ADX {adx_val:.1f} - trend sangat kuat")
-        elif adx_val >= 25:
+        elif adx_val >= 20:
             score += 7
-            reasons.append(f"✅ ADX {adx_val:.1f} - trend kuat")
+            reasons.append(f"✅ ADX {adx_val:.1f} - trend cukup kuat")
         elif adx_val >= 15:
-            score += 3
+            score += 4
             reasons.append(f"⚠️ ADX {adx_val:.1f} - trend lemah")
         else:
-            reasons.append(f"🚫 ADX {adx_val:.1f} - tidak ada trend jelas")
+            score += 2
+            reasons.append(f"⚠️ ADX {adx_val:.1f} - trend sangat lemah")
 
         # 6. Candlestick pattern (10 poin)
         bullish_patterns = ["HAMMER_BULLISH", "BULLISH_ENGULFING",
@@ -280,7 +291,8 @@ class SignalGenerator:
         reasons: List[str] = []
         try:
             trend_15m = self._get_trend(df_15m)
-            macd_line, signal_line, histogram = self.ind.macd(df_15m["Close"], 12, 26, 9)
+            macd_line, signal_line, histogram = self.ind.macd(
+                df_15m["Close"], 12, 26, 9)
             macd_15m_bull = histogram.iloc[-1] > 0
 
             if signal_type == "BUY":
@@ -323,7 +335,8 @@ class SignalGenerator:
 
                 if not macd_15m_bull:
                     delta += 5
-                    reasons.append("✅ MACD 15m negatif — konfirmasi bearish (+5)")
+                    reasons.append(
+                        "✅ MACD 15m negatif — konfirmasi bearish (+5)")
                 else:
                     delta -= 5
                     reasons.append("⚠️ MACD 15m positif — kontratren (-5)")
@@ -371,25 +384,26 @@ class SignalGenerator:
         trend = self._get_trend(df_5m)
         support, resistance = self._calculate_support_resistance(df_5m)
 
-        # Kondisi wajib BUY
-        if rsi_val > 70:
-            return None  # Overbought, skip
-        if not macd_bull and histogram.iloc[-1] < -0.5:
-            return None  # MACD sangat bearish
+        # Kondisi wajib BUY — hanya blok di kondisi paling ekstrem
+        if rsi_val > 85:
+            return None  # Sangat overbought, skip
+        # MACD sangat bearish DAN trend jelas downtrend → skip
+        if not macd_bull and histogram.iloc[-1] < -0.5 and trend in ("DOWNTREND",):
+            return None
 
         # Skor sinyal
         score, reasons = self._score_signal(
             rsi_val, macd_bull, vol_ratio, trend, candle_pattern, adx, "BUY"
         )
 
-        # ── Konfirmasi 15m ──────────────────────────────────────
+        # ── Konfirmasi 15m ──────────────────────────────────────────
         if df_15m is not None and len(df_15m) >= 20:
             delta_15m, reasons_15m = self._get_15m_confirmation(df_15m, "BUY")
             score = max(0, min(100, score + delta_15m))
             reasons.extend(reasons_15m)
 
-        if score < 45:
-            return None  # Sinyal terlalu lemah
+        if score < 30:
+            return None  # Hanya buang sinyal yang benar-benar lemah
 
         # ─── Kalkulasi Entry, TP, SL ───
         # Entry: harga saat ini atau sedikit di bawah (konfirmasi breakout)
@@ -523,22 +537,23 @@ class SignalGenerator:
         bb_upper, bb_mid, bb_lower = self.ind.bollinger_bands(close, 20, 2)
 
         # Filter: jangan generate waspada jika kondisi tidak jelas bearish
-        if rsi_val < 30:
-            return None  # Sudah oversold, bukan bearish baru
-        if not macd_bear and histogram.iloc[-1] > 0.5:
-            return None  # MACD masih bullish
+        if rsi_val < 20:
+            return None  # Sangat oversold, sudah terlambat untuk waspada
+        # MACD masih sangat bullish DAN trend uptrend → skip
+        if not macd_bear and histogram.iloc[-1] > 0.5 and trend in ("UPTREND",):
+            return None
 
         score, reasons = self._score_signal(
             rsi_val, not macd_bear, vol_ratio, trend, candle_pattern, adx, "SELL"
         )
 
-        # ── Konfirmasi 15m ──────────────────────────────────────
+        # ── Konfirmasi 15m ──────────────────────────────────────────
         if df_15m is not None and len(df_15m) >= 20:
             delta_15m, reasons_15m = self._get_15m_confirmation(df_15m, "SELL")
             score = max(0, min(100, score + delta_15m))
             reasons.extend(reasons_15m)
 
-        if score < 45:
+        if score < 30:
             return None
 
         # Tambahkan peringatan konteks IDX di paling awal

@@ -399,12 +399,14 @@ Contoh: /signal BBCA</i>
         if cross_dn:
             msg += "⚠️ <b>EMA9 baru cross DOWN EMA20!</b> (sinyal bearish)\n"
 
+        def _pct(a, b): return ((a - b) / b * 100) if b else 0.0
+
         msg += (
             f"\n🗺 <b>SUPPORT & RESISTANCE</b>\n"
-            f"🔴 Resistance 1: {fmt(res)} (+{(res-price)/price*100:.1f}%)\n"
-            f"🔴 Resistance 2: {fmt(res2)} (+{(res2-price)/price*100:.1f}%)\n"
-            f"🟢 Support 1   : {fmt(sup)} (-{(price-sup)/price*100:.1f}%)\n"
-            f"🟢 Support 2   : {fmt(sup2)} (-{(price-sup2)/price*100:.1f}%)\n\n"
+            f"🔴 Resistance 1: {fmt(res)} (+{_pct(res, price):.1f}%)\n"
+            f"🔴 Resistance 2: {fmt(res2)} (+{_pct(res2, price):.1f}%)\n"
+            f"🟢 Support 1   : {fmt(sup)} (-{_pct(price, sup):.1f}%)\n"
+            f"🟢 Support 2   : {fmt(sup2)} (-{_pct(price, sup2):.1f}%)\n\n"
 
             f"🔬 <b>INDIKATOR</b>\n"
             f"{rsi_icon} RSI(9)   : {rsi:.1f} — {rsi_z}\n"

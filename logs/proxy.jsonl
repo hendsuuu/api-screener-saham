@@ -45,3 +45,4 @@
 {"time": "2026-02-26T08:08:51", "event": "proxy_rotate", "proxy_prev": "http://4.213.167.178:80", "proxy_new": "http://203.196.8.6:3128", "reason": "ERROR"}
 {"time": "2026-02-26T08:08:54", "event": "proxy_rotate", "proxy_prev": "http://203.196.8.6:3128", "proxy_new": "http://195.114.209.50:80", "reason": "ERROR"}
 {"time": "2026-02-26T08:08:57", "event": "proxy_rotate", "proxy_prev": "http://195.114.209.50:80", "proxy_new": "http://157.66.192.91:8080", "reason": "ERROR"}
+{"time": "2026-02-27T13:30:55", "event": "proxy_rotate", "proxy_prev": "http://44.219.16.212:80", "proxy_new": "http://104.238.30.58:63744", "reason": "ERROR"}

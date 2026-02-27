@@ -116,6 +116,16 @@ class StockScanner:
             )
             source = "live"
 
+        # Jika 5d juga tidak cukup, coba period lebih panjang
+        if df_5m is None or len(df_5m) < 50:
+            df_5m = self.fetcher.get_intraday_data(
+                ticker,
+                period="1mo",
+                interval="5m"
+            )
+            if df_5m is not None and len(df_5m) >= 50:
+                source = "live(1mo)"
+
         # ── Load 15m dari store untuk konfirmasi timeframe ───────
         df_15m = None
         try:
@@ -198,7 +208,7 @@ class StockScanner:
     def scan_all(
         self,
         watchlist: Optional[List[str]] = None,
-        min_score: int = 55,
+        min_score: int = 40,
         min_volume_ratio: float = 0.0,
         signal_filter: Optional[str] = None,  # "BUY", "SELL", atau None
         skip_prescreen: bool = False,
@@ -231,38 +241,16 @@ class StockScanner:
 
         # ── Tahap 1: tentukan kandidat ───────────────────────
         if watchlist is not None:
-            # Watchlist manual → skip pre-screener
             candidates = watchlist
             logger.info(
-                f"Scan manual: {len(candidates)} saham (pre-screen dilewati)"
+                f"Scan manual: {len(candidates)} saham"
             )
-        elif skip_prescreen:
+        else:
+            # Langsung scan seluruh universe tanpa pre-screen
             universe = get_effective_universe()
             candidates = universe
             logger.info(
-                f"Scan tanpa pre-screen: {len(candidates)} saham (debug mode)"
-            )
-        else:
-            # DEFAULT: pre-screen effective universe dulu
-            universe = get_effective_universe()
-            logger.info(
-                f"Tahap 1 — Pre-screen {len(universe)} saham IDX + custom..."
-            )
-            self.pre_screener.universe = universe
-            candidates = self.pre_screener.run(verbose=True)
-            self.last_prescreen_summary = self.pre_screener.summary()
-
-            if not candidates:
-                logger.warning(
-                    "Pre-screen tidak menghasilkan kandidat. "
-                    "Pasar mungkin tutup atau data terbatas. "
-                    "Fallback ke SCREENER_WATCHLIST."
-                )
-                candidates = SCREENER_WATCHLIST
-
-            logger.info(
-                f"Tahap 1 selesai: {len(candidates)} kandidat lolos pre-screen "
-                f"(dari {len(universe)} saham)"
+                f"Tahap 1 — {len(candidates)} saham IDX langsung ke analisis teknikal"
             )
 
         # ── Tahap 2: analisis teknikal paralel ───────────────
@@ -918,7 +906,7 @@ class StockScanner:
     async def scan_all_async(
         self,
         watchlist: Optional[List[str]] = None,
-        min_score: int = 55,
+        min_score: int = 40,
         min_volume_ratio: float = 0.0,
         signal_filter: Optional[str] = None,
         skip_prescreen: bool = False,
